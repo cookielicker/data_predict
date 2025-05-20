@@ -17,7 +17,7 @@ print(cir_cp_df["2021-11-01"][0])
 # print(cir_cp_df.head())
 
 
-data_file = "C:/Users/p_hzhongxu/Documents/GitHub/data_predict/raw_data/data_2021-11-01_2022-10-31/mtx_open_1day.csv"
+data_file = "../raw_data/data_2021-11-01_2022-10-31/mtx_open_1day.csv"
 
 # data_df = pd.read_csv(data_file)
 
