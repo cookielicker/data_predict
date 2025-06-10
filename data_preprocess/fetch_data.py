@@ -152,7 +152,8 @@ if __name__ == "__main__":
   # adj后均价
   mean_adj_data = safe_elementwise_multiple(mean_data, adj_factor)
 
-
+  ### 计算换手率
+  change_data = np.full_like(vol_data, fill_value=np.nan, dtype=float)
 
   # x = np.arange(0, len(mean_adj_data[:, 0]))
   # # plt.bar(x, data_np[:, 0])
