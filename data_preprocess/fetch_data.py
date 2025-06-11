@@ -5,21 +5,6 @@ import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
 
-file = "../raw_data/circulating_cap.csv"
-
-cir_cp_df = pd.read_csv(file)
-
-print(cir_cp_df.columns)
-print(cir_cp_df.shape)
-# print(cir_cp_df.info())
-print(cir_cp_df["2021-11-01"])
-print(cir_cp_df["2021-11-01"][0])
-# print(cir_cp_df.head())
-
-sec_list_file = "../raw_data/sec_list.csv"
-sec_list_df = pd.read_csv(sec_list_file, header=None)
-print(sec_list_df[0][0])
-
 def convert_stock_code(stock_code):
     """
     将股票代码转换为指定格式
@@ -30,6 +15,18 @@ def convert_stock_code(stock_code):
         return f'CS_SSE_{stock_code[:6]}'
     return stock_code
 
+def load_trade_date(folder_list, file_name, father=None):
+  date_df = None
+  for folder in folder_list:
+    if father is None:
+      file_path = os.path.join(folder, file_name)
+    else:
+      file_path = os.path.join(father, folder, file_name)
+    if date_df is None:
+      date_df = pd.read_csv(file_path, header=None)
+    else:
+      date_df = pd.concat([date_df, pd.read_csv(file_path, header=None)])
+  return date_df
 
 def read_data_csv(file_list, data=None, axis=0):
   for file in file_list:
@@ -110,6 +107,38 @@ def safe_elementwise_multiple(a, b, default=np.nan):
     
     return result
 
+def find_element_numpy(df, target):
+    """
+    使用 NumPy 高效查找元素位置
+    
+    参数:
+        df: Pandas DataFrame
+        target: 要查找的值
+        
+    返回:
+        list: (index, column) 元组列表
+    """
+    # 将 DataFrame 转换为 NumPy 数组
+    arr = df.values
+    
+    # 处理 NaN
+    if pd.isna(target):
+        mask = pd.isna(arr)
+    else:
+        mask = (arr == target)
+    
+    # 获取匹配位置的行列索引
+    rows, cols = np.where(mask)
+    
+    # 转换为 DataFrame 的索引和列名
+    positions = []
+    for i in range(len(rows)):
+        row_idx = df.index[rows[i]]
+        col_name = df.columns[cols[i]]
+        positions.append((row_idx, col_name))
+    
+    return positions
+
 
 if __name__ == "__main__":
   raw_data_path = "../raw_data"
@@ -134,6 +163,8 @@ if __name__ == "__main__":
                 "mtx_high_adj_1day.csv",
                 "mtx_low_adj_1day.csv",]
   
+  trade_date = "trade_date_list.csv"
+  
   # 获取 adj 因子
   open_data = load_data(folder_names, raw_names[0], father=raw_data_path)
   # print(open_data.shape)
@@ -154,6 +185,45 @@ if __name__ == "__main__":
 
   ### 计算换手率
   change_data = np.full_like(vol_data, fill_value=np.nan, dtype=float)
+
+  ### circulating cap
+  cir_cp_file = "../raw_data/circulating_cap.csv"
+  cir_cp_df = pd.read_csv(cir_cp_file)
+
+  ### sec_list
+  sec_list_file = "../raw_data/sec_list.csv"
+  sec_list_df = pd.read_csv(sec_list_file, header=None)
+
+  ### trade_date_list
+  trade_date_df = load_trade_date(folder_names, trade_date, father=raw_data_path)
+  # print(vol_data.shape)
+  # print(trade_date_df.shape)
+
+  columns = cir_cp_df.columns
+  for cir_index, code in enumerate(cir_cp_df[columns[0]]):
+    stock_code = convert_stock_code(code)
+    positions = find_element_numpy(sec_list_df, stock_code)
+    #  print(positions)
+    try:
+      code_index = positions[0][0]
+      # print(code_index)
+    except:
+      code_index = None
+      print(f"stock code {stock_code} not find in sec list!!!")
+
+    if code_index is not None:
+      for date_index, date in enumerate(trade_date_df[0]):
+        cap_data = cir_cp_df.get(date)
+        if cap_data is None:
+          print(f"{date} cap data missing!!!")
+        else:
+          change_data[date_index, code_index] = cap_data[cir_index]
+  
+  ### cir_cap 单位为10000
+  change_data = safe_elementwise_multiple(change_data, np.full_like(change_data, fill_value=10000, dtype=float))
+  change_data = safe_elementwise_divide(vol_data, change_data)
+  print(change_data[:, 0])
+       
 
   # x = np.arange(0, len(mean_adj_data[:, 0]))
   # # plt.bar(x, data_np[:, 0])
