@@ -142,9 +142,6 @@ def find_element_numpy(df, target):
 
 if __name__ == "__main__":
   raw_data_path = "../raw_data"
-  # create middle data
-  middle_data_path = "../middle_data"
-  os.makedirs(middle_data_path, exist_ok=True)
   # folder_names
   folder_names = ["data_2021-11-01_2022-10-31",
                 "data_2022-11-01_2023-10-31",
@@ -165,6 +162,7 @@ if __name__ == "__main__":
   
   trade_date = "trade_date_list.csv"
   
+  ### 计算adj后均价
   # 获取 adj 因子
   open_data = load_data(folder_names, raw_names[0], father=raw_data_path)
   # print(open_data.shape)
@@ -221,13 +219,37 @@ if __name__ == "__main__":
   
   ### cir_cap 单位为10000
   change_data = safe_elementwise_multiple(change_data, np.full_like(change_data, fill_value=10000, dtype=float))
+  # 计算换手率
   change_data = safe_elementwise_divide(vol_data, change_data)
-  print(change_data[:, 0])
-       
+  # print(change_data[:, 0])
 
-  # x = np.arange(0, len(mean_adj_data[:, 0]))
+  ### write data
+  # create middle data
+  middle_data_path = "../middle_data"
+  os.makedirs(middle_data_path, exist_ok=True)
+  middle_files = ["high_adj.npy",
+                  "low_adj.npy",
+                  "mean_adj.npy",
+                  "change_rate.npy"]
+  # adj均价
+  np.save(os.path.join(middle_data_path, middle_files[2]), mean_adj_data)
+
+  # 换手率
+  np.save(os.path.join(middle_data_path, middle_files[3]), mean_adj_data)
+
+  # adj最高价
+  high_adj_data = load_data(folder_names, adj_names[2], father=raw_data_path)
+  np.save(os.path.join(middle_data_path, middle_files[0]), high_adj_data)
+
+  # adj最低价
+  low_adj_data = load_data(folder_names, adj_names[3], father=raw_data_path)
+  np.save(os.path.join(middle_data_path, middle_files[1]), high_adj_data)
+       
+  # loaded_adj_mean_data = np.load("../middle_data/mean_adj.npy")
+
+  # x = np.arange(0, len(loaded_adj_mean_data[:, 0]))
   # # plt.bar(x, data_np[:, 0])
-  # plt.plot(x, mean_adj_data[:, 0])
+  # plt.plot(x, loaded_adj_mean_data[:, 0])
   # plt.show()
 
   
