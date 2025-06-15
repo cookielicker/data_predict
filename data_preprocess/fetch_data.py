@@ -251,9 +251,3 @@ if __name__ == "__main__":
   # # plt.bar(x, data_np[:, 0])
   # plt.plot(x, loaded_adj_mean_data[:, 0])
   # plt.show()
-
-  
-
-
-
-
