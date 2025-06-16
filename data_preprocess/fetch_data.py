@@ -1,9 +1,9 @@
 import os
 import sys
-sys.path.append("./")
+from pathlib import Path
+sys.path.append(Path("./"))
 import pandas as pd
 import numpy as np
-from matplotlib import pyplot as plt
 
 def convert_stock_code(stock_code):
     """
@@ -141,7 +141,7 @@ def find_element_numpy(df, target):
 
 
 if __name__ == "__main__":
-  raw_data_path = "../raw_data"
+  raw_data_path = Path("../raw_data")
   # folder_names
   folder_names = ["data_2021-11-01_2022-10-31",
                 "data_2022-11-01_2023-10-31",
@@ -185,11 +185,11 @@ if __name__ == "__main__":
   change_data = np.full_like(vol_data, fill_value=np.nan, dtype=float)
 
   ### circulating cap
-  cir_cp_file = "../raw_data/circulating_cap.csv"
+  cir_cp_file = Path("../raw_data/circulating_cap.csv")
   cir_cp_df = pd.read_csv(cir_cp_file)
 
   ### sec_list
-  sec_list_file = "../raw_data/sec_list.csv"
+  sec_list_file = Path("../raw_data/sec_list.csv")
   sec_list_df = pd.read_csv(sec_list_file, header=None)
 
   ### trade_date_list
@@ -225,7 +225,7 @@ if __name__ == "__main__":
 
   ### write data
   # create middle data
-  middle_data_path = "../middle_data"
+  middle_data_path = Path("../middle_data")
   os.makedirs(middle_data_path, exist_ok=True)
   middle_files = ["high_adj.npy",
                   "low_adj.npy",
@@ -248,14 +248,8 @@ if __name__ == "__main__":
     np.save(os.path.join(middle_data_path, middle_files[1]), high_adj_data)
        
   # loaded_adj_mean_data = np.load("../middle_data/mean_adj.npy")
-
+  # from matplotlib import pyplot as plt
   # x = np.arange(0, len(loaded_adj_mean_data[:, 0]))
   # # plt.bar(x, data_np[:, 0])
   # plt.plot(x, loaded_adj_mean_data[:, 0])
   # plt.show()
-
-  
-
-
-
-
