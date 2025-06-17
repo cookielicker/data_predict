@@ -231,13 +231,13 @@ if __name__ == "__main__":
                   "low_adj.npy",
                   "mean_adj.npy",
                   "change_rate.npy"]
-  write_flag = False
+  write_flag = True
   if write_flag:
     # adj均价
     np.save(os.path.join(middle_data_path, middle_files[2]), mean_adj_data)
 
     # 换手率
-    np.save(os.path.join(middle_data_path, middle_files[3]), mean_adj_data)
+    np.save(os.path.join(middle_data_path, middle_files[3]), change_data)
 
     # adj最高价
     high_adj_data = load_data(folder_names, adj_names[2], father=raw_data_path)
@@ -245,7 +245,7 @@ if __name__ == "__main__":
 
     # adj最低价
     low_adj_data = load_data(folder_names, adj_names[3], father=raw_data_path)
-    np.save(os.path.join(middle_data_path, middle_files[1]), high_adj_data)
+    np.save(os.path.join(middle_data_path, middle_files[1]), low_adj_data)
        
   # loaded_adj_mean_data = np.load("../middle_data/mean_adj.npy")
   # from matplotlib import pyplot as plt
