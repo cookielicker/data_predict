@@ -45,7 +45,12 @@ if __name__ == "__main__":
   test_dataset = Dockdataset(dataset_path, split_index, total_num)
 
   batch_size = 64
-  train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+  train_loader = DataLoader(train_dataset,
+                            batch_size=batch_size,
+                            shuffle=True,
+                            num_workers=16,
+                            persistent_workers=True,
+                            prefetch_factor=2,)
   test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
   model = FCmodel(previous_num, num_class=class_num)
