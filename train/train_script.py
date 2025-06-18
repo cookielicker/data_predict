@@ -41,8 +41,8 @@ if __name__ == "__main__":
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
   split_index = int(0.8 * total_num)
-  train_dataset = Dockdataset(dataset_path, 0, split_index)
-  test_dataset = Dockdataset(dataset_path, split_index, total_num)
+  train_dataset = Dockdataset(dataset_path, 0, split_index, total_num)
+  test_dataset = Dockdataset(dataset_path, split_index, total_num, total_num)
 
   batch_size = 64
   train_loader = DataLoader(train_dataset,
@@ -51,7 +51,12 @@ if __name__ == "__main__":
                             num_workers=16,
                             persistent_workers=True,
                             prefetch_factor=2,)
-  test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+  test_loader = DataLoader(test_dataset,
+                           batch_size=batch_size,
+                           shuffle=True,
+                           num_workers=16,
+                           persistent_workers=True,
+                           prefetch_factor=2,)
 
   model = FCmodel(previous_num, num_class=class_num)
   model.to(device)
@@ -85,7 +90,8 @@ if __name__ == "__main__":
           
           epoch_loss += loss.item() * inputs.size(0)
 
-          print(idx)
+          if idx % 1000 == 0:
+              print(idx)
       
       # 计算平均训练损失
       epoch_loss /= len(train_loader.dataset)
@@ -97,12 +103,12 @@ if __name__ == "__main__":
       total = 0
       
       with torch.no_grad():
-          for inputs, labels in test_loader:
-              outputs = model(torch.tensor(inputs, device=device))
+          for v_idx, (inputs, labels) in enumerate(test_loader):
+              outputs = model(torch.tensor(inputs, device=device).float())
               _, predicted = torch.max(outputs, 1)  # 获取预测类别
               total += labels.size(0)
-              correct += (predicted == labels).sum().item()
-      
+              correct += (predicted.to(torch.device("cpu")) == labels).sum().item()
+   
       accuracy = 100 * correct / total
       test_accuracies.append(accuracy)
       

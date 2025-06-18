@@ -7,11 +7,12 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 class Dockdataset(Dataset):
-  def __init__(self, dataset_path, start_id, end_id, class_num=5, previous_num=15, predict_num=3, data_limit=10000):
+  def __init__(self, dataset_path, start_id, end_id, total, class_num=5, previous_num=15, predict_num=3, data_limit=10000):
     super().__init__()
     self.path = dataset_path
     self.start = start_id
     self.end = end_id
+    self.total = total
     self.class_num = class_num
     self.previous = previous_num
     self.predict = predict_num
@@ -55,6 +56,8 @@ class Dockdataset(Dataset):
     index = index + self.start
     # filename = ((index + self.limit - 1) // self.limit) * self.limit
     filename = ((index + self.limit) // self.limit) * self.limit
+    if filename > self.total:
+      filename = self.total
     filename = f"{filename:07d}.npy"
     filename = os.path.join(Path(self.path), filename)
     if self.cache_name == filename:
