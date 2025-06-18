@@ -53,7 +53,8 @@ class Dockdataset(Dataset):
   
   def __getitem__(self, index):
     index = index + self.start
-    filename = ((index + self.limit - 1) // self.limit) * self.limit
+    # filename = ((index + self.limit - 1) // self.limit) * self.limit
+    filename = ((index + self.limit) // self.limit) * self.limit
     filename = f"{filename:07d}.npy"
     filename = os.path.join(Path(self.path), filename)
     if self.cache_name == filename:
