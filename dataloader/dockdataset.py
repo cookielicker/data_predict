@@ -16,6 +16,8 @@ class Dockdataset(Dataset):
     self.previous = previous_num
     self.predict = predict_num
     self.limit = data_limit
+    self.cache_name = None
+    self.cache = None
 
   def __len__(self):
     return self.end - self.start
@@ -54,7 +56,12 @@ class Dockdataset(Dataset):
     filename = ((index + self.limit - 1) // self.limit) * self.limit
     filename = f"{filename:07d}.npy"
     filename = os.path.join(Path(self.path), filename)
-    file_data = np.load(filename)
+    if self.cache_name == filename:
+      file_data = self.cache
+    else:
+      file_data = np.load(filename)
+      self.cache_name = filename
+      self.cache = file_data
     data, label = self._trans(file_data[index%self.limit])
     return data, label
     

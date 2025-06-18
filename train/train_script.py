@@ -44,7 +44,7 @@ if __name__ == "__main__":
   train_dataset = Dockdataset(dataset_path, 0, split_index)
   test_dataset = Dockdataset(dataset_path, split_index, total_num)
 
-  batch_size = 8
+  batch_size = 64
   train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
   test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -66,12 +66,12 @@ if __name__ == "__main__":
       model.train()
       epoch_loss = 0.0
       
-      for inputs, labels in train_loader:
+      for idx, (inputs, labels) in enumerate(train_loader):
           # 前向传播
           outputs = model(torch.tensor(inputs, device=device).float())
           
           # 计算损失
-          loss = criterion(outputs, labels)
+          loss = criterion(outputs, torch.tensor(labels, device=device))
           
           # 反向传播和优化
           optimizer.zero_grad()
@@ -79,6 +79,8 @@ if __name__ == "__main__":
           optimizer.step()
           
           epoch_loss += loss.item() * inputs.size(0)
+
+          print(idx)
       
       # 计算平均训练损失
       epoch_loss /= len(train_loader.dataset)
@@ -91,7 +93,7 @@ if __name__ == "__main__":
       
       with torch.no_grad():
           for inputs, labels in test_loader:
-              outputs = model(inputs)
+              outputs = model(torch.tensor(inputs, device=device))
               _, predicted = torch.max(outputs, 1)  # 获取预测类别
               total += labels.size(0)
               correct += (predicted == labels).sum().item()
