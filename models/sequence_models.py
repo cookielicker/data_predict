@@ -9,10 +9,10 @@ import torch.nn.functional as F
 
 class LSTMModel(nn.Module):
     """LSTM 序列模型"""
-    def __init__(self, input_size, seq_len=15, hidden_size=256, num_classes=5, num_layers=2, dropout=0.3):
+    def __init__(self, input_size=2, seq_len=15, hidden_size=256, num_classes=5, num_layers=2, dropout=0.3):
         """
         Args:
-            input_size: 每个时间步的特征数 (应该 = 1, 因为每步就是一个标量)
+            input_size: 每个时间步的特征数 (应该 = 2)
             seq_len: 序列长度 (15个历史步)
             hidden_size: LSTM隐层大小
             num_classes: 分类数 (5)
@@ -42,12 +42,14 @@ class LSTMModel(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: (batch_size, 18) - 18维向量
-                需要reshape为 (batch_size, 15, 1)
+            x: (batch_size, 30) - 30维向量
+                reshape为 (batch_size, 15, 2)
+                维度0-14: pct (% change)
+                维度15-29: change (change_rate)
         """
-        # Reshape: (batch, 18) -> (batch, 15, 1)
+        # Reshape: (batch, 30) -> (batch, 15, 2)
         batch_size = x.size(0)
-        x = x[:, :self.seq_len].unsqueeze(-1)  # 取前15个特征作为序列
+        x = x.reshape(batch_size, self.seq_len, self.input_size)
         
         # LSTM forward
         lstm_out, (hidden, cell) = self.lstm(x)
@@ -65,11 +67,11 @@ class LSTMModel(nn.Module):
 
 class TransformerModel(nn.Module):
     """Transformer 序列模型"""
-    def __init__(self, input_size, seq_len=15, d_model=128, nhead=4, num_layers=3, 
+    def __init__(self, input_size=2, seq_len=15, d_model=128, nhead=4, num_layers=3, 
                  dropout=0.3, num_classes=5):
         """
         Args:
-            input_size: 每个时间步的特征数 (应该 = 1)
+            input_size: 每个时间步的特征数 (应该 = 2)
             seq_len: 序列长度 (15个历史步)
             d_model: Transformer内部维度
             nhead: 多头注意力的头数
@@ -107,21 +109,26 @@ class TransformerModel(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: (batch_size, 18)
+            x: (batch_size, 30) - 30维向量
+                reshape为 (batch_size, 15, 2)
+                维度0-14: pct (% change)
+                维度15-29: change (change_rate)
         """
-        # Reshape并嵌入
+        # Reshape: (batch, 30) -> (batch, 15, 2)
         batch_size = x.size(0)
-        x = x[:, :self.seq_len].unsqueeze(-1)  # (batch, 15, 1)
-        x = self.embedding(x)  # (batch, 15, d_model)
+        x = x.reshape(batch_size, self.seq_len, self.input_size)
         
-        # 添加位置编码
+        # 嵌入层: (batch, 15, 2) -> (batch, 15, d_model)
+        x = self.embedding(x)
+        
+        # 位置编码: (batch, 15, d_model)
         x = self.pos_encoder(x)
         
-        # Transformer编码
-        x = self.transformer_encoder(x)  # (batch, 15, d_model)
+        # Transformer编码: (batch, 15, d_model)
+        x = self.transformer_encoder(x)
         
-        # 使用平均池化
-        x = x.mean(dim=1)  # (batch, d_model)
+        # 使用平均池化: (batch, 15, d_model) -> (batch, d_model)
+        x = x.mean(dim=1)
         
         # 全连接层
         x = F.relu(self.fc1(x))
@@ -163,11 +170,11 @@ class PositionalEncoding(nn.Module):
 
 # 为了向后兼容，创建一个包装类
 class LSTMSequenceModel(nn.Module):
-    """接收(batch, 18)的输入，自动处理reshape"""
+    """接收(batch, 30)的输入，自动拆分成(batch, 15, 2)"""
     def __init__(self, num_classes=5, hidden_size=256, num_layers=2):
         super().__init__()
         self.model = LSTMModel(
-            input_size=1,
+            input_size=2,
             seq_len=15,
             hidden_size=hidden_size,
             num_classes=num_classes,
@@ -180,11 +187,11 @@ class LSTMSequenceModel(nn.Module):
 
 
 class TransformerSequenceModel(nn.Module):
-    """接收(batch, 18)的输入，自动处理reshape"""
+    """接收(batch, 30)的输入，自动拆分成(batch, 15, 2)"""
     def __init__(self, num_classes=5, d_model=128, num_layers=3):
         super().__init__()
         self.model = TransformerModel(
-            input_size=1,
+            input_size=2,
             seq_len=15,
             d_model=d_model,
             nhead=4,

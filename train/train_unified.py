@@ -44,7 +44,15 @@ class EarlyStopping:
 
 
 def create_model(model_type, input_size=15, num_classes=5):
-    """创建模型"""
+    """创建模型
+    
+    Note: 
+      - FCmodel 期望 input_size=15
+        数据30维会被 chunk(2, dim=-1) 分成两个15维
+        head_0 处理pct部分，head_1 处理change部分
+      - LSTM/Transformer 期望 input_size=30
+        会自动 reshape(batch, 15, 2) 处理
+    """
     if model_type == "fc":
         return FCmodel(input_size, num_class=num_classes)
     elif model_type == "lstm":
@@ -123,7 +131,6 @@ def train_model(model_type, num_epochs=50, batch_size=64, learning_rate=0.0001):
     dataset_path = project_root / "dataset"
     total_num = 3805550
     split_index = int(0.8 * total_num)
-    previous_num = 15
     class_num = 5
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -148,7 +155,7 @@ def train_model(model_type, num_epochs=50, batch_size=64, learning_rate=0.0001):
 
     # 创建模型
     print(f"🧠 创建模型: {get_model_name(model_type)}...")
-    model = create_model(model_type, input_size=previous_num, num_classes=class_num)
+    model = create_model(model_type, input_size=15, num_classes=class_num)
     model.to(device)
     
     # 统计参数
