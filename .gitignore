@@ -1,2 +1,9 @@
 *.npy
 *.pyc
+.venv/
+*.pt
+dataset/
+dataset_30/
+stock_data/*.csv
+stock_data/all_a_stocks_clean.csv
+__pycache__/

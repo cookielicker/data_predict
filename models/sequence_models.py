@@ -1,204 +1,301 @@
 """
-序列模型 (LSTM, Transformer) 用于时间序列预测
+序列模型 — 统一输入 [bs, seq_len, feature_dim], Backbone+Classifier 分离
 """
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class LSTMModel(nn.Module):
-    """LSTM 序列模型"""
-    def __init__(self, input_size=2, seq_len=15, hidden_size=256, num_classes=5, num_layers=2, dropout=0.3):
-        """
-        Args:
-            input_size: 每个时间步的特征数 (应该 = 2)
-            seq_len: 序列长度 (15个历史步)
-            hidden_size: LSTM隐层大小
-            num_classes: 分类数 (5)
-            num_layers: LSTM层数
-            dropout: dropout比例
-        """
-        super().__init__()
-        self.input_size = input_size
-        self.seq_len = seq_len
-        self.hidden_size = hidden_size
-        
-        # LSTM层
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            dropout=dropout if num_layers > 1 else 0,
-            batch_first=True
-        )
-        
-        # 全连接层
-        self.fc1 = nn.Linear(hidden_size, hidden_size // 2)
-        self.fc2 = nn.Linear(hidden_size // 2, num_classes)
-        
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        """
-        Args:
-            x: (batch_size, 30) - 30维向量
-                reshape为 (batch_size, 15, 2)
-                维度0-14: pct (% change)
-                维度15-29: change (change_rate)
-        """
-        # Reshape: (batch, 30) -> (batch, 15, 2)
-        batch_size = x.size(0)
-        x = x.reshape(batch_size, self.seq_len, self.input_size)
-        
-        # LSTM forward
-        lstm_out, (hidden, cell) = self.lstm(x)
-        
-        # 使用最后一个时间步的输出
-        last_hidden = lstm_out[:, -1, :]  # (batch, hidden_size)
-        
-        # 全连接层
-        x = F.relu(self.fc1(last_hidden))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        
-        return x
-
-
-class TransformerModel(nn.Module):
-    """Transformer 序列模型"""
-    def __init__(self, input_size=2, seq_len=15, d_model=128, nhead=4, num_layers=3, 
-                 dropout=0.3, num_classes=5):
-        """
-        Args:
-            input_size: 每个时间步的特征数 (应该 = 2)
-            seq_len: 序列长度 (15个历史步)
-            d_model: Transformer内部维度
-            nhead: 多头注意力的头数
-            num_layers: Transformer编码器层数
-            dropout: dropout比例
-            num_classes: 分类数 (5)
-        """
-        super().__init__()
-        self.input_size = input_size
-        self.seq_len = seq_len
-        self.d_model = d_model
-        
-        # 嵌入层 (把输入投影到d_model维)
-        self.embedding = nn.Linear(input_size, d_model)
-        
-        # 位置编码
-        self.pos_encoder = PositionalEncoding(d_model, seq_len, dropout)
-        
-        # Transformer编码器
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=d_model * 4,
-            dropout=dropout,
-            batch_first=True
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-        # 全连接层
-        self.fc1 = nn.Linear(d_model, d_model // 2)
-        self.fc2 = nn.Linear(d_model // 2, num_classes)
-        
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        """
-        Args:
-            x: (batch_size, 30) - 30维向量
-                reshape为 (batch_size, 15, 2)
-                维度0-14: pct (% change)
-                维度15-29: change (change_rate)
-        """
-        # Reshape: (batch, 30) -> (batch, 15, 2)
-        batch_size = x.size(0)
-        x = x.reshape(batch_size, self.seq_len, self.input_size)
-        
-        # 嵌入层: (batch, 15, 2) -> (batch, 15, d_model)
-        x = self.embedding(x)
-        
-        # 位置编码: (batch, 15, d_model)
-        x = self.pos_encoder(x)
-        
-        # Transformer编码: (batch, 15, d_model)
-        x = self.transformer_encoder(x)
-        
-        # 使用平均池化: (batch, 15, d_model) -> (batch, d_model)
-        x = x.mean(dim=1)
-        
-        # 全连接层
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        
-        return x
-
-
 class PositionalEncoding(nn.Module):
-    """位置编码"""
     def __init__(self, d_model, max_len, dropout=0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
-
-        # 创建位置编码矩阵
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * 
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() *
                             (-torch.log(torch.tensor(10000.0)) / d_model))
-        
         pe[:, 0::2] = torch.sin(position * div_term)
         if d_model % 2 == 1:
             pe[:, 1::2] = torch.cos(position * div_term[:-1])
         else:
             pe[:, 1::2] = torch.cos(position * div_term)
-        
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        """
-        Args:
-            x: (batch, seq_len, d_model)
-        """
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
 
-# 为了向后兼容，创建一个包装类
-class LSTMSequenceModel(nn.Module):
-    """接收(batch, 30)的输入，自动拆分成(batch, 15, 2)"""
-    def __init__(self, num_classes=5, hidden_size=256, num_layers=2):
+class MLPClassifier(nn.Module):
+    """统一分类头: d_model → d_model/2 → num_class"""
+    def __init__(self, d_model, num_class, dropout=0.3):
         super().__init__()
-        self.model = LSTMModel(
-            input_size=2,
-            seq_len=15,
-            hidden_size=hidden_size,
-            num_classes=num_classes,
-            num_layers=num_layers,
-            dropout=0.3
-        )
-    
+        self.fc1 = nn.Linear(d_model, d_model // 2)
+        self.fc2 = nn.Linear(d_model // 2, num_class)
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
-        return self.model(x)
+        # x: [bs, d_model]
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
 
 
-class TransformerSequenceModel(nn.Module):
-    """接收(batch, 30)的输入，自动拆分成(batch, 15, 2)"""
-    def __init__(self, num_classes=5, d_model=128, num_layers=3):
+# ========================== LSTM ==========================
+
+class LSTMModel(nn.Module):
+    """LSTM 序列模型 — 统一输入 [bs, seq_len, feature_dim]"""
+    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+                 hidden_size=256, num_layers=2, dropout=0.3):
         super().__init__()
-        self.model = TransformerModel(
-            input_size=2,
-            seq_len=15,
-            d_model=d_model,
-            nhead=4,
-            num_layers=num_layers,
-            dropout=0.3,
-            num_classes=num_classes
-        )
-    
+        self.feature_dim = feature_dim
+        self.seq_len = seq_len
+        self.hidden_size = hidden_size
+        self.num_class = num_class
+
+        self.embed = nn.Linear(feature_dim, hidden_size)
+        self.lstm = nn.LSTM(hidden_size, hidden_size, num_layers=num_layers,
+                            dropout=dropout if num_layers > 1 else 0, batch_first=True)
+        self.classifier = MLPClassifier(hidden_size, num_class, dropout)
+
     def forward(self, x):
-        return self.model(x)
+        # x: [bs, seq_len, feature_dim]
+        x = self.embed(x)                       # [bs, seq_len, hidden]
+        x, _ = self.lstm(x)                     # [bs, seq_len, hidden]
+        x = x[:, -1, :]                          # [bs, hidden]
+        x = self.classifier(x)                   # [bs, num_class]
+        return x
+
+    def backbone_state_dict(self):
+        full = self.state_dict()
+        return {k: v for k, v in full.items() if not k.startswith('classifier.')}
+
+    def load_backbone_state_dict(self, backbone_state):
+        own = self.state_dict()
+        for k, v in backbone_state.items():
+            if k in own and not k.startswith('classifier.'): own[k] = v
+        self.load_state_dict(own, strict=False)
+
+    def freeze_backbone(self):
+        for name, p in self.named_parameters():
+            if not name.startswith('classifier.'): p.requires_grad = False
+
+    def unfreeze_backbone(self):
+        for p in self.parameters(): p.requires_grad = True
+
+
+# ========================== Transformer Encoder ==========================
+
+class EncoderModel(nn.Module):
+    """Transformer Encoder — 统一输入 [bs, seq_len, feature_dim]"""
+    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+                 d_model=128, nhead=4, num_layers=3, dropout=0.3):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.seq_len = seq_len
+        self.d_model = d_model
+        self.num_class = num_class
+
+        self.embedding = nn.Linear(feature_dim, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, seq_len, dropout)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4,
+            dropout=dropout, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        self.classifier = MLPClassifier(d_model, num_class, dropout)
+
+    def forward(self, x):
+        # x: [bs, seq_len, feature_dim]
+        x = self.embedding(x)                    # [bs, seq_len, d_model]
+        x = self.pos_encoder(x)                  # [bs, seq_len, d_model]
+        x = self.transformer(x)                  # [bs, seq_len, d_model]
+        x = x.mean(dim=1)                        # [bs, d_model]
+        x = self.classifier(x)                   # [bs, num_class]
+        return x
+
+    def backbone_state_dict(self):
+        full = self.state_dict()
+        return {k: v for k, v in full.items() if not k.startswith('classifier.')}
+
+    def load_backbone_state_dict(self, backbone_state):
+        own = self.state_dict()
+        for k, v in backbone_state.items():
+            if k in own and not k.startswith('classifier.'): own[k] = v
+        self.load_state_dict(own, strict=False)
+
+    def freeze_backbone(self):
+        for name, p in self.named_parameters():
+            if not name.startswith('classifier.'): p.requires_grad = False
+
+    def unfreeze_backbone(self):
+        for p in self.parameters(): p.requires_grad = True
+
+
+# ========================== Decoder Transformer ==========================
+
+class DecoderTransformerModel(nn.Module):
+    """Decoder-only Transformer — 统一输入 [bs, seq_len, feature_dim]"""
+    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+                 d_model=128, nhead=4, num_layers=3, dropout=0.3):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.seq_len = seq_len
+        self.d_model = d_model
+        self.num_class = num_class
+
+        self.embedding = nn.Linear(feature_dim, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, seq_len, dropout)
+
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4,
+            dropout=dropout, batch_first=True)
+        self.transformer = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+
+        self.classifier = MLPClassifier(d_model, num_class, dropout)
+
+    def forward(self, x):
+        # x: [bs, seq_len, feature_dim]
+        x = self.embedding(x)
+        x = self.pos_encoder(x)
+        causal_mask = torch.tril(torch.ones(self.seq_len, self.seq_len, device=x.device))
+        x = self.transformer(x, x, tgt_mask=causal_mask)
+        x = x.mean(dim=1)
+        x = self.classifier(x)
+        return x
+
+    def backbone_state_dict(self):
+        full = self.state_dict()
+        return {k: v for k, v in full.items() if not k.startswith('classifier.')}
+
+    def load_backbone_state_dict(self, backbone_state):
+        own = self.state_dict()
+        for k, v in backbone_state.items():
+            if k in own and not k.startswith('classifier.'): own[k] = v
+        self.load_state_dict(own, strict=False)
+
+    def freeze_backbone(self):
+        for name, p in self.named_parameters():
+            if not name.startswith('classifier.'): p.requires_grad = False
+
+    def unfreeze_backbone(self):
+        for p in self.parameters(): p.requires_grad = True
+
+
+# ========================== MoE Decoder ==========================
+
+class MoEFeedForward(nn.Module):
+    """MoE FFN with load-balancing aux loss"""
+    def __init__(self, d_model, dim_feedforward, num_experts=4, top_k=1, dropout=0.1):
+        super().__init__()
+        self.num_experts = num_experts
+        self.top_k = top_k
+
+        self.router = nn.Linear(d_model, num_experts)
+        expert_dim = dim_feedforward // num_experts * 2
+        self.W1 = nn.Linear(d_model, expert_dim)
+        self.W2 = nn.Linear(expert_dim, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.aux_loss = 0.0
+
+    def forward(self, x):
+        N, seq_len, D = x.shape
+        flat = x.reshape(-1, D)
+        router_logits = self.router(flat)
+        router_probs = F.softmax(router_logits, dim=-1)
+        topk_probs, topk_indices = torch.topk(router_probs, self.top_k, dim=-1)
+        topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
+
+        # Aux loss
+        ones_hot = F.one_hot(topk_indices.view(-1), num_classes=self.num_experts).float()
+        self.aux_loss = self.num_experts * (ones_hot.mean(dim=0) * router_probs.mean(dim=0)).sum()
+
+        out = torch.zeros_like(flat)
+        for exp_i in range(self.num_experts):
+            mask = (topk_indices == exp_i)
+            idx = mask.nonzero(as_tuple=True)[0]
+            if idx.numel() == 0: continue
+            w = topk_probs[idx]
+            if w.dim() > 1: w = w[:, 0] if self.top_k > 1 else w.squeeze(-1)
+            expert_in = flat[idx]
+            h = F.relu(self.W1(expert_in))
+            h = self.dropout(h)
+            expert_out = self.dropout(self.W2(h))
+            out[idx] += expert_out * w.unsqueeze(-1)
+
+        return out.reshape(N, seq_len, D)
+
+
+class MoEDecoderLayer(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward, num_experts=4, top_k=1, dropout=0.1):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.moe = MoEFeedForward(d_model, dim_feedforward, num_experts, top_k, dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, causal_mask=None):
+        attn_out, _ = self.self_attn(x, x, x, attn_mask=causal_mask)
+        x = self.norm1(x + self.dropout(attn_out))
+        x = self.norm2(x + self.dropout(self.moe(x)))
+        return x
+
+    @property
+    def aux_loss(self):
+        return self.moe.aux_loss
+
+
+class DecoderTransformerModelMoE(nn.Module):
+    """MoE Decoder Transformer — 统一输入 [bs, seq_len, feature_dim]"""
+    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+                 d_model=128, nhead=4, num_layers=3, num_experts=4, top_k=1, dropout=0.3):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.seq_len = seq_len
+        self.d_model = d_model
+        self.num_class = num_class
+
+        self.embedding = nn.Linear(feature_dim, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, seq_len, dropout)
+
+        dim_feedforward = d_model * 4
+        self.layers = nn.ModuleList([
+            MoEDecoderLayer(d_model, nhead, dim_feedforward, num_experts, top_k, dropout)
+            for _ in range(num_layers)
+        ])
+
+        self.classifier = MLPClassifier(d_model, num_class, dropout)
+
+    def forward(self, x):
+        # x: [bs, seq_len, feature_dim]
+        x = self.embedding(x)
+        x = self.pos_encoder(x)
+        causal_mask = torch.triu(torch.ones(self.seq_len, self.seq_len, device=x.device) * float('-inf'), diagonal=1)
+        total_aux = 0.0
+        for layer in self.layers:
+            x = layer(x, causal_mask=causal_mask)
+            total_aux += layer.aux_loss
+        x = x.mean(dim=1)
+        x = self.classifier(x)
+        return x, total_aux
+
+    def backbone_state_dict(self):
+        full = self.state_dict()
+        return {k: v for k, v in full.items() if not k.startswith('classifier.')}
+
+    def load_backbone_state_dict(self, backbone_state):
+        own = self.state_dict()
+        for k, v in backbone_state.items():
+            if k in own and not k.startswith('classifier.'): own[k] = v
+        self.load_state_dict(own, strict=False)
+
+    def freeze_backbone(self):
+        for name, p in self.named_parameters():
+            if not name.startswith('classifier.'): p.requires_grad = False
+
+    def unfreeze_backbone(self):
+        for p in self.parameters(): p.requires_grad = True

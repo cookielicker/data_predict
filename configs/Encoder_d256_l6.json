@@ -1,0 +1,17 @@
+{
+  "_desc": "Encoder d256 l6 ~3.2M params",
+  "model": {
+    "type": "encoder",
+    "d_model": 256,
+    "num_layers": 6
+  },
+  "training": {
+    "dataset": "baostock_dataset_30",
+    "previous_num": 30,
+    "weights": [1.0, 1.0, 1.0, 1.0],
+    "lr": 0.0001,
+    "batch_size": 2048,
+    "max_epochs": 200,
+    "patience": 20
+  }
+}
