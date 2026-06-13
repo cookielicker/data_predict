@@ -256,9 +256,8 @@ def main():
                                     last_line = line
                         if last_line:
                             last = last_line.split(',')[0].strip()
-                            # 2天内算新鲜 (非交易日/未开盘时 today 无数据)
-                            fresh_date = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-                            if last >= fresh_date:
+                            # 最后一次日期等于今天就不拉
+                            if last == today:
                                 need_fetch = False
                             else:
                                 last_date = (datetime.strptime(last, '%Y-%m-%d') - timedelta(days=2)).strftime('%Y-%m-%d')
@@ -325,10 +324,17 @@ def main():
 
             # 每50次重新登录 (skip 也会走到这里)
             if (i + 1) % 50 == 0:
-                logout()
-                if not login():
-                    logger.error("重新登录失败!")
-                    break
+                try:
+                    logout()
+                except Exception:
+                    pass
+                # 重试登录, 失败不退出, 继续用旧连接
+                for retry in range(3):
+                    if login():
+                        break
+                    time.sleep(2)
+                else:
+                    logger.warning(f"重新登录失败, 继续尝试...")
                 if refresh:
                     logger.info(f"[{i+1}/{total_stocks}] re-login, updated={updated}, skip={skip}, fail={fail}")
                 else:

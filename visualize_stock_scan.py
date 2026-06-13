@@ -130,6 +130,8 @@ class StockScanViewer:
         self._df_cache = None
         self._cache_code = None
         self._day_index = 0
+        self._scan_offset = 0   # 从最新日往前偏移几天扫描
+        self._data_refreshed = False  # 首次刷新后不再重复 pull
 
         self._latest_results = []
         self._filter_mode = "all"
@@ -290,6 +292,7 @@ class StockScanViewer:
             return
 
         self._scan_btn.config(state=tk.DISABLED)
+        self._scan_btn.config(text=f"Scan @ offset -{self._scan_offset}d")
         self._set_progress(0, 100, "加载股票列表...")
         self.root.update()
 
@@ -306,25 +309,30 @@ class StockScanViewer:
             if csv_path.exists():
                 self._stocks.append((code, str(name), str(csv_path)))
 
-        # Phase 1: 增量刷新
-        self._set_progress(0, 100, "增量刷新 stock_data (见终端)...")
-        self.root.update()
-        print("\n" + "="*50)
-        print("[visual_scan] 开始增量刷新...")
-        print("="*50)
-        try:
-            result = subprocess.run(
-                [sys.executable, 'fetch_data/fetch_baostock.py', '--refresh'],
-                timeout=1800, cwd=Path(__file__).parent,
-            )
-            self._status_label.config(text="stock_data 已刷新")
-        except subprocess.TimeoutExpired:
-            print("[visual_scan] 刷新超时, 继续使用现有数据")
-            self._status_label.config(text="刷新超时, 使用现有数据")
-        except Exception as e:
-            print(f"[visual_scan] 刷新出错: {e}")
-            self._status_label.config(text=f"刷新出错: {e}")
-        print("="*50 + "\n")
+        # Phase 1: 首次增量刷新, 后续跳过
+        if not self._data_refreshed:
+            self._set_progress(0, 100, "增量刷新 stock_data (见终端)...")
+            self.root.update()
+            print("\n" + "="*50)
+            print("[visual_scan] 开始增量刷新...")
+            print("="*50)
+            try:
+                result = subprocess.run(
+                    [sys.executable, 'fetch_data/fetch_baostock.py', '--refresh'],
+                    timeout=1800, cwd=Path(__file__).parent,
+                )
+                self._status_label.config(text="stock_data 已刷新")
+            except subprocess.TimeoutExpired:
+                print("[visual_scan] 刷新超时, 继续使用现有数据")
+                self._status_label.config(text="刷新超时, 使用现有数据")
+            except Exception as e:
+                print(f"[visual_scan] 刷新出错: {e}")
+                self._status_label.config(text=f"刷新出错: {e}")
+            print("="*50 + "\n")
+            self._data_refreshed = True
+        else:
+            self._set_progress(0, 100, "跳过刷新, 直接扫描...")
+            self.root.update()
 
         # Phase 2: 扫描最新预测
         total = len(self._stocks)
@@ -349,7 +357,7 @@ class StockScanViewer:
                 continue
 
             # 最新有效位置
-            best_idx = len(df) - 1  # 默认最新一天
+            best_idx = max(0, len(df) - 1 - self._scan_offset)  # offset 天前
             if best_idx < PREVIOUS_NUM - 1:
                 continue
 
@@ -461,6 +469,7 @@ class StockScanViewer:
         self._stock_index = self._filtered[self._filter_pos]
         r = self._latest_results[self._stock_index]
         self._day_index = r['day_idx']
+        self._track_offset()
         self._load_and_draw(r['csv_path'], r['code'], r['name'])
 
     def _prev_stock(self):
@@ -477,6 +486,7 @@ class StockScanViewer:
         r = self._latest_results[self._stock_index]
         if self._day_index > PREVIOUS_NUM - 1:
             self._day_index -= 1
+            self._track_offset()
             self._load_and_draw(r['csv_path'], r['code'], r['name'])
 
     def _next_day(self):
@@ -488,7 +498,18 @@ class StockScanViewer:
             max_day = self._day_index
         if self._day_index < max_day:
             self._day_index += 1
+            self._track_offset()
             self._load_and_draw(r['csv_path'], r['code'], r['name'])
+
+    def _track_offset(self):
+        """根据当前 day_index 计算 offset (距最新日多少天)"""
+        r = self._latest_results[self._stock_index]
+        try:
+            df = pd.read_csv(r['csv_path'])
+            self._scan_offset = len(df) - 1 - self._day_index
+        except Exception:
+            pass
+        self._scan_btn.config(text=f"Scan @ offset -{self._scan_offset}d")
 
     def _load_and_draw(self, csv_path, code, name):
         try:
