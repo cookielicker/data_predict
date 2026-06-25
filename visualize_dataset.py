@@ -33,8 +33,8 @@ def _cal_pct(d):
     return r
 
 
-def compute_label(mean_slice):
-    pct = (mean_slice[-1] - mean_slice[PREVIOUS_NUM - 1]) / mean_slice[PREVIOUS_NUM - 1]
+def compute_label(close_p_slice):
+    pct = (close_p_slice[-1] - close_p_slice[PREVIOUS_NUM - 1]) / close_p_slice[PREVIOUS_NUM - 1]
     if pct < -0.1:
         return 0, pct
     elif pct > 0.1:
@@ -116,14 +116,13 @@ class DatasetViewer:
         self.fig = Figure(figsize=(12, 8), facecolor="#2b2b2b")
 
         # Matplotlib — GridSpec: 价格 + 变化率 + 换手率/波动率 + 换手率变化量
-        gs = GridSpec(4, 1, figure=self.fig, height_ratios=[2.5, 1, 1.5, 1.5],
+        gs = GridSpec(3, 1, figure=self.fig, height_ratios=[3, 2, 2],
                       top=0.97, bottom=0.05, left=0.08, right=0.93, hspace=0.08)
-        self.ax1 = self.fig.add_subplot(gs[0])   # 价格
-        self.ax2 = self.fig.add_subplot(gs[1], sharex=self.ax1)  # 变化率 (与价格共享X轴)
-        self.ax3 = self.fig.add_subplot(gs[2])   # 换手率+波动率
-        self.ax4 = self.fig.add_subplot(gs[3])   # 换手率变化量
+        self.ax_price = self.fig.add_subplot(gs[0])
+        self.ax_turnover = self.fig.add_subplot(gs[1])
+        self.ax_delta = self.fig.add_subplot(gs[2])
 
-        for ax in [self.ax1, self.ax2, self.ax3, self.ax4]:
+        for ax in [self.ax_price, self.ax_turnover, self.ax_delta]:
             ax.set_facecolor("#1e1e1e")
             ax.tick_params(colors="#aaaaaa")
             ax.spines["bottom"].set_color("#555555")
@@ -167,8 +166,8 @@ class DatasetViewer:
         if not path:
             return
         data = np.load(path)
-        if data.ndim != 2 or data.shape[1] != PP * 4:
-            self._file_label.config(text=f"格式错误: shape={data.shape}, 需要 (N, {PP * 4})")
+        if data.ndim != 2 or data.shape[1] != PP * 8:
+            self._file_label.config(text=f"格式错误: shape={data.shape}, 需要 (N, {PP * 8})")
             return
         self._all_samples = data
         self._all_codes = self._load_codes(path)
@@ -254,30 +253,30 @@ class DatasetViewer:
             return
 
         raw = self._all_samples[self._current_idx]
-        mean = raw[:PP]
-        change = raw[PP : 2 * PP]
-        hl = raw[2 * PP : 3 * PP]
-        change_delta = raw[3 * PP : 4 * PP]
-        price_pct = _cal_pct(mean[:PREVIOUS_NUM])
+        pct     = raw[0*PP:1*PP]; ampl   = raw[1*PP:2*PP]
+        daychg  = raw[2*PP:3*PP]
+        chg     = raw[3*PP:4*PP]; cd_    = raw[4*PP:5*PP]
+        bb_pos  = raw[5*PP:6*PP]; bb_w   = raw[6*PP:7*PP]
+        rsi     = raw[7*PP:8*PP]
 
-        label, ret_pct = compute_label(mean)
+        label, ret_pct = compute_label(close_p)
         label_color = LABEL_COLORS[label]
         stock_code = self._all_codes[self._current_idx] if self._all_codes else "?"
 
         STYLE = dict(facecolor="#1e1e1e", tick_params=dict(colors="#aaaaaa"),
                      grid=dict(alpha=0.15, color="#888888"))
 
-        # ── Ax1: Price (mean_adj) — 33天, 与下方的pct_change共享X轴 ──
-        ax = self.ax1
+        # ── Ax1: Price (close_p_adj) — 33天, 与下方的pct_change共享X轴 ──
+        ax = self.ax_price
         ax.clear()
         ax.set_facecolor(STYLE["facecolor"])
         days = np.arange(PP)
-        ax.plot(days, mean, color="#3498db", linewidth=1.3, marker="o", markersize=3)
+        ax.plot(days, close_p, color="#3498db", linewidth=1.3, marker="o", markersize=3)
         ax.axvspan(PREVIOUS_NUM - 1, PP - 1, alpha=0.10, color="#f39c12")
         ax.axvline(x=PREVIOUS_NUM - 1, color="#f39c12", linestyle="--", linewidth=1.2)
-        ax.scatter([PREVIOUS_NUM - 1], [mean[PREVIOUS_NUM - 1]], color="#e74c3c", s=40, zorder=5,
+        ax.scatter([PREVIOUS_NUM - 1], [close_p[PREVIOUS_NUM - 1]], color="#e74c3c", s=40, zorder=5,
                    label=f"day 29 (history end)")
-        ax.scatter([PP - 1], [mean[-1]],
+        ax.scatter([PP - 1], [close_p[-1]],
                    color="#2ecc71" if ret_pct >= 0 else "#e74c3c", s=55, zorder=5, marker="D",
                    label=f"day 32 (target)")
         ax.set_ylabel("Price", color="#bbbbbb")
@@ -296,61 +295,29 @@ class DatasetViewer:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
-        # ── Ax2: Price pct_change — 30天, 与ax1共享X轴 ──
-        ax = self.ax2
+        # ── Ax2: Turnover ──
+        ax = self.ax_turnover
         ax.clear()
         ax.set_facecolor(STYLE["facecolor"])
         x = np.arange(PREVIOUS_NUM)
-        colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in price_pct]
-        ax.bar(x, price_pct, color=colors, width=0.7, alpha=0.85)
-        ax.axhline(y=0, color="#666666", linewidth=0.8)
-        # 标记每个bar的值范围
-        ax.set_ylabel("Δ%", color="#bbbbbb", fontsize=9)
-        ax.set_xlabel("Day  (price 折线图每个相邻点的涨跌幅度 ↓ 一一对齐)", color="#888888", fontsize=8)
+        ax.bar(x, chg[:PREVIOUS_NUM], width=0.7, color="#9b59b6", alpha=0.8, label="change_rate")
+        ax.set_xlabel("Day (0-29 = 30-day history)", color="#888888", fontsize=8)
+        ax.set_ylabel("Turnover", color="#9b59b6")
+        ax.set_title("Turnover (change_rate)", color="#cccccc", fontsize=10)
         ax.grid(True, axis="y", **STYLE["grid"])
         ax.tick_params(**STYLE["tick_params"])
         for sp in ax.spines.values():
             sp.set_color("#555555")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        # 限制X轴范围对齐
-        ax.set_xlim(-0.5, PP - 0.5)
 
-        # ── Ax3: Change rate + High-low ratio ──
-        ax = self.ax3
-        ax.clear()
-        # 清理旧的 twinx，避免切换样本时右轴重叠
-        if hasattr(self, '_ax3_twinx') and self._ax3_twinx in self.fig.axes:
-            self.fig.delaxes(self._ax3_twinx)
-        ax.set_facecolor(STYLE["facecolor"])
-        x = np.arange(PREVIOUS_NUM)
-        ax.bar(x - 0.15, change[:PREVIOUS_NUM], width=0.3,
-               color="#9b59b6", alpha=0.8, label="change_rate (换手率)")
-        ax2_ = ax.twinx()
-        self._ax3_twinx = ax2_
-        ax2_.bar(x + 0.15, hl[:PREVIOUS_NUM], width=0.3,
-                 color="#1abc9c", alpha=0.8, label="high_low_ratio (波动率)")
-        ax.set_xlabel("Day (0-29 = 30-day history)", color="#888888", fontsize=8)
-        ax.set_ylabel("Turnover", color="#9b59b6")
-        ax2_.set_ylabel("Volatility", color="#1abc9c")
-        ax.set_title("Turnover & Volatility (模型输入特征)", color="#cccccc", fontsize=10)
-        ax.grid(True, axis="y", **STYLE["grid"])
-        ax.tick_params(**STYLE["tick_params"])
-        ax2_.tick_params(**STYLE["tick_params"])
-        for sp in list(ax.spines.values()) + list(ax2_.spines.values()):
-            sp.set_color("#555555")
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2_.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=8,
-                  facecolor="#333333", edgecolor="#555555", labelcolor="#cccccc")
-
-        # ── Ax4: Change rate delta (换手率变化量) ──
-        ax = self.ax4
+        # ── Ax3: Change delta ──
+        ax = self.ax_delta
         ax.clear()
         ax.set_facecolor(STYLE["facecolor"])
         x = np.arange(PREVIOUS_NUM)
-        delta_colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in change_delta[:PREVIOUS_NUM]]
-        ax.bar(x, change_delta[:PREVIOUS_NUM], color=delta_colors, width=0.6, alpha=0.85)
+        delta_colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in cd_[:PREVIOUS_NUM]]
+        ax.bar(x, cd_[:PREVIOUS_NUM], color=delta_colors, width=0.6, alpha=0.85)
         ax.axhline(y=0, color="#666666", linewidth=0.8)
         ax.set_xlabel("Day (0-29 = 30-day history)", color="#888888", fontsize=8)
         ax.set_ylabel("Δ Turnover", color="#bbbbbb")

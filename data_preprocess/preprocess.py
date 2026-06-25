@@ -53,8 +53,6 @@ def find_continue_data(frames: list,
         flag = False
         for i, frame in enumerate(frames):
             flag |= np.isnan(frame[end_id]) if p_flag else check_nan_presence(frame[start_id:end_id])
-            if i == 0 and not p_flag:
-                flag |= np.any(frame[start_id:end_id] == 0)  # mean_adj不能有0
         if flag:
             p_flag = False
             start_id = end_id + 1
@@ -85,20 +83,22 @@ def main():
     print(f"=" * 60)
     print(f"历史天数 (previous_num): {previous_num}")
     print(f"预测天数 (predict_num): {predict_num}")
-    print(f"每样本特征数: ({previous_num} + {predict_num}) + {previous_num}*3 = {(previous_num + predict_num) + previous_num * 3}")
-    print(f"  - mean (价格): {previous_num} + {predict_num}")
-    print(f"  - change (换手率): {previous_num}")
-    print(f"  - high_low (波动率): {previous_num}")
+    print(f"每样本特征数: 8 x ({previous_num}+{predict_num}) = {8*(previous_num+predict_num)}")
+    print(f"  - price_pct, amplitude, day_chg (3 price features): each {previous_num}+{predict_num}")
+    print(f"  - change_rate (换手率): {previous_num}")
     print(f"  - change_delta (换手率变化量): {previous_num}")
+    print(f"  - bb_position, bb_width (布林带): {previous_num}")
     print(f"中间数据目录: {middle_data_path}")
     print(f"输出目录: {dataset_path}")
     print(f"=" * 60)
 
     # 加载原始数据
-    middle_files = ["mean_adj.npy", "change_rate.npy", "high_low_ratio.npy", "change_delta.npy"]
+    middle_files = ["price_pct.npy", "amplitude.npy", "day_chg.npy",
+                   "change_rate.npy", "change_delta.npy", "bb_position.npy", "bb_width.npy",
+                   "rsi.npy"]
     data_frames = []
     for file in middle_files:
-        data_frames.append(np.load(middle_data_path / file))
+        data_frames.append(np.load(middle_data_path / file).astype(np.float32))
 
     length, number = data_frames[0].shape
 

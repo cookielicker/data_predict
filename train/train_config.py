@@ -22,7 +22,7 @@ from tqdm import tqdm
 DEFAULTS = {
     "model": {
         "type": "fc",
-        "feature_dim": 4,
+        "feature_dim": 8,
         "seq_len": 30,
         "num_class": 4,
         "hidden_size": 256,
@@ -33,6 +33,7 @@ DEFAULTS = {
         "dataset": "baostock_dataset_30",
         "previous_num": 30,
         "predict_num": 3,
+        "threshold": 0.10,
         "weights": [1.0, 1.0, 1.0, 1.0],
         "lr": 0.0001,
         "batch_size": 2048,
@@ -93,10 +94,12 @@ def _cal_pct(d):
         r = np.where(np.isfinite(r), r, 0)
     return r
 
+_THRESHOLD = 0.10
+
 def _get_label(pct_chg):
-    if pct_chg < -0.1: return 0
+    if pct_chg < -_THRESHOLD: return 0
     elif pct_chg < 0: return 1
-    elif pct_chg <= 0.1: return 2
+    elif pct_chg <= _THRESHOLD: return 2
     else: return 3
 
 class DS(Dataset):
@@ -107,11 +110,17 @@ class DS(Dataset):
     def __getitem__(self, idx):
         raw = self.data[idx]
         pp = self.previous + self.predict
-        mean = raw[:pp]; change = raw[pp:2*pp]; hl = raw[2*pp:3*pp]; cd_ = raw[3*pp:4*pp]
-        price_pct = _cal_pct(mean[:self.previous])
-        pct_chg = (mean[-1] - mean[self.previous - 1]) / mean[self.previous - 1]
+        pct     = raw[0*pp:1*pp]; ampl   = raw[1*pp:2*pp]
+        daychg  = raw[2*pp:3*pp]
+        chg     = raw[3*pp:4*pp]; cd_    = raw[4*pp:5*pp]
+        bb_pos  = raw[5*pp:6*pp]; bb_w   = raw[6*pp:7*pp]
+        rsi     = raw[7*pp:8*pp]
+        pct_chg = (1+pct[self.previous])*(1+pct[self.previous+1])*(1+pct[self.previous+2]) - 1
         label = _get_label(pct_chg)
-        features = np.stack([price_pct, change[:self.previous], hl[:self.previous], cd_[:self.previous]], axis=-1)
+        features = np.stack([pct[:self.previous], ampl[:self.previous], daychg[:self.previous],
+                             chg[:self.previous], cd_[:self.previous],
+                             bb_pos[:self.previous], bb_w[:self.previous],
+                             rsi[:self.previous]], axis=-1)
         return features.astype(np.float32), label
 
 class DSShared(Dataset):
@@ -122,11 +131,16 @@ class DSShared(Dataset):
     def __getitem__(self, idx):
         raw = _global_data[idx + self.start].numpy()
         pp = self.previous + self.predict
-        mean = raw[:pp]; change = raw[pp:2*pp]; hl = raw[2*pp:3*pp]; cd_ = raw[3*pp:4*pp]
-        price_pct = _cal_pct(mean[:self.previous])
-        pct_chg = (mean[-1] - mean[self.previous - 1]) / mean[self.previous - 1]
+        pct     = raw[0*pp:1*pp]; ampl   = raw[1*pp:2*pp]
+        daychg  = raw[2*pp:3*pp]
+        chg     = raw[3*pp:4*pp]; cd_    = raw[4*pp:5*pp]
+        bb_pos  = raw[5*pp:6*pp]; bb_w   = raw[6*pp:7*pp]
+        rsi     = raw[7*pp:8*pp]
+        pct_chg = (1+pct[self.previous])*(1+pct[self.previous+1])*(1+pct[self.previous+2]) - 1
         label = _get_label(pct_chg)
-        features = np.stack([price_pct, change[:self.previous], hl[:self.previous], cd_[:self.previous]], axis=0)
+        features = np.stack([open_p[:self.previous], high_p[:self.previous], low_p[:self.previous],
+                             close_p[:self.previous], chg[:self.previous], cd_[:self.previous],
+                             bb_pos[:self.previous], bb_w[:self.previous]], axis=0)
         return features.astype(np.float32), label
 
 
@@ -134,11 +148,11 @@ def load_data(dataset_path, previous, predict):
     global _global_data
     files = sorted([f for f in os.listdir(dataset_path) if f.endswith('.npy')])
     total_bytes = sum(os.path.getsize(os.path.join(dataset_path, f)) for f in files)
-    THRESHOLD = 8 * 1024**3
+    THRESHOLD = 6 * 1024**3
     if total_bytes < THRESHOLD:
         print(f'数据大小: {total_bytes/1024**3:.2f}GB < 8GB, 共享内存模式')
         all_data = []
-        for f in files: all_data.append(np.load(os.path.join(dataset_path, f)))
+        for f in files: all_data.append(np.load(os.path.join(dataset_path, f)).astype(np.float32))
         all_data = np.concatenate(all_data, axis=0)
         np.random.seed(42); np.random.shuffle(all_data)
         _global_data = torch.from_numpy(all_data).share_memory_()
@@ -150,7 +164,7 @@ def load_data(dataset_path, previous, predict):
     else:
         print(f'数据大小: {total_bytes/1024**3:.2f}GB > 8GB, 单进程模式')
         all_data = []
-        for f in files: all_data.append(np.load(os.path.join(dataset_path, f)))
+        for f in files: all_data.append(np.load(os.path.join(dataset_path, f)).astype(np.float32))
         all_data = np.concatenate(all_data, axis=0)
         np.random.seed(42); np.random.shuffle(all_data)
         total_num = len(all_data)
@@ -290,11 +304,13 @@ def main():
 
     cfg = load_config(args.config, args.override)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    global _THRESHOLD
+    _THRESHOLD = cfg['training'].get('threshold', 0.10)
 
     print(f"\n{'='*60}")
     print(f"配置: {args.config}")
     print(f"{'='*60}")
-    print(f"模型: {cfg['model']['type']}, 类别数: {len(cfg['training']['weights'])}")
+    print(f"模型: {cfg['model']['type']}, 阈值: ±{_THRESHOLD*100:.0f}%, 类别数: {len(cfg['training']['weights'])}")
     print(f"超参: {json.dumps(cfg['model'], indent=None)}")
     print(f"训练: {json.dumps(cfg['training'], indent=None)}")
     if args.two_stage:

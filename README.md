@@ -18,7 +18,7 @@ python fetch_data/fetch_baostock.py --start 2024-01-01 --end 2026-06-03 --force
 python data_preprocess/convert_csv_to_middle.py
 
 # 3. 中间矩阵 → 最终数据集 (30天滑动窗口, 132维, ~877万样本)
-python data_preprocess/preprocess.py --middle middle_data_baostock --output baostock_dataset_30
+python data_preprocess/preprocess.py --middle middle_data_baostock --output baostock_dataset_30  # ~937万样本, 240维输入
 ```
 
 ## 训练

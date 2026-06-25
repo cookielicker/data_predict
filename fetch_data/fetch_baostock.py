@@ -148,6 +148,32 @@ def _fetch_with_timeout(code, start_date, end_date, timeout):
 EXPECTED_COLS = ["date", "code", "open", "high", "low", "close", "preclose",
                  "volume", "amount", "adjustflag", "turn", "tradestatus", "pctChg", "isST"]
 
+def _merge_and_save(stock_file, df, is_refresh):
+    """CSV 合并保存 (线程安全, 不含 baostock 调用).
+    返回 (success, need_full_refetch)"""
+    if is_refresh and stock_file.exists():
+        try:
+            old = pd.read_csv(stock_file)
+            overlap_date = df['date'].iloc[0]
+            old_row = old[old['date'] == overlap_date]
+            if len(old_row) > 0:
+                old_close = float(old_row['close'].iloc[0])
+                new_close = float(df[df['date'] == overlap_date]['close'].iloc[0])
+                if abs(old_close - new_close) > 0.01:
+                    return (False, True)  # 除权除息, 需全量重拉
+            combined = pd.concat([old, df], ignore_index=True)
+            combined = combined.drop_duplicates(subset=['date'], keep='last')
+            combined = combined.sort_values('date').reset_index(drop=True)
+            combined.to_csv(stock_file, index=False)
+            return (True, False)
+        except Exception:
+            df.to_csv(stock_file, index=False)
+            return (True, False)
+    else:
+        df.to_csv(stock_file, index=False)
+        return (True, False)
+
+
 def _validate_and_clean(df):
     """过滤 baostock 返回中的无效行 (列数不对/日期格式错/缺失关键字段)"""
     if df is None or len(df) == 0:
@@ -198,6 +224,29 @@ def main():
     socket.setdefaulttimeout(SOCKET_TIMEOUT)
     logger.info(f"Socket timeout: {SOCKET_TIMEOUT}s, Per-stock timeout: {PER_STOCK_TIMEOUT}s")
 
+    # 股票列表不存在时自动重建
+    if not STOCK_LIST_FILE.exists():
+        print("股票列表文件不存在, 自动从 Baostock 重建...")
+        if not login():
+            logger.error("登录失败!")
+            return
+        # 用 query_all_stock 一次获取全市场股票
+        day = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        rs = bs.query_all_stock(day=day)
+        if rs.error_code != '0':
+            logger.error(f"获取股票列表失败: {rs.error_msg}")
+            return
+        df_all = rs.get_data()  # 用 get_data() 不是 next()
+        # 过滤: 只保留正常交易的A股个股, 排除指数
+        # 只保留A股个股 (排除指数: sh.000xxx, 排除ETF: sz.159xxx)
+        df_all = df_all[(df_all['code'] >= 'sh.600000') & (df_all['code'] < 'sz.399000')]
+        df_all = df_all[~df_all['code'].str.match(r'sz\.159\d{3}')]
+        df_all = df_all[df_all['tradeStatus'] == '1']
+        df_all = df_all[~df_all['code_name'].str.contains('退', na=False)]
+        df_all = df_all[['code', 'tradeStatus', 'code_name']]
+        df_all.to_csv(STOCK_LIST_FILE, index=False)
+        logout()
+        print(f'已重建股票列表: {len(df_all)} 只')
     df_stocks = pd.read_csv(STOCK_LIST_FILE)
     # 过滤退市股
     if 'tradeStatus' in df_stocks.columns:
@@ -229,86 +278,110 @@ def main():
         logger.error("登录失败!")
         return
 
+    # Probe: 拉一只大盘股确认 baostock 最新可用日期 (处理非交易日)
+    probe_code = 'sh.600000'
+    if refresh:
+        print(f"探针: 查询 {probe_code} 确定最新可用日期...")
+        probe_df = _fetch_with_timeout(probe_code, (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d'), today, 30)
+        if probe_df is not None and len(probe_df) > 0:
+            latest_available = probe_df['date'].iloc[-1]
+            print(f"  baostock 最新日期: {latest_available}")
+        else:
+            latest_available = today
+            print(f"  探针失败, 使用 today={today}")
+    else:
+        latest_available = today
+
     try:
-        success = 0
-        skip = 0
-        fail = 0
-        updated = 0
+        success = 0; skip = 0; fail = 0; updated = 0
         failed_stocks = []
 
-        print(f"\n开始获取...")
-        print("-" * 60)
+        if refresh:
+            # ── Phase 1: 多线程扫描, 确定哪些需要更新 (只读CSV, 无API) ──
+            from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        for i, code in enumerate(stocks):
-            stock_file = DATA_DIR / f"{code.replace('.', '_')}.csv"
+            def _check_one(task):
+                code, stock_file_str = task
+                stock_file = Path(stock_file_str)
+                if not stock_file.exists():
+                    return (code, True, start_date, stock_file_str)
+                try:
+                    last_line = ''
+                    with open(stock_file, 'r') as fh:
+                        for line in fh:
+                            if line.strip(): last_line = line
+                    if last_line:
+                        last = last_line.split(',')[0].strip()
+                        if last >= latest_available:
+                            return (code, False, None, None)  # skip: 已最新, 前复权数据天然已调整
+                        last_date = (datetime.strptime(last, '%Y-%m-%d') - timedelta(days=2)).strftime('%Y-%m-%d')
+                        return (code, True, last_date, stock_file_str)  # fetch
+                except Exception:
+                    pass
+                return (code, True, start_date, stock_file_str)  # fetch (fallback)
 
-            if refresh:
-                # 增量模式: 只拉缺失部分
-                need_fetch = True
-                last_date = start_date
-                if stock_file.exists():
-                    try:
-                        # 只读最后一行检查日期 (快)
-                        last_line = ''
-                        with open(stock_file, 'r') as fh:
-                            for line in fh:
-                                if line.strip():
-                                    last_line = line
-                        if last_line:
-                            last = last_line.split(',')[0].strip()
-                            # 最后一次日期等于今天就不拉
-                            if last == today:
-                                need_fetch = False
-                            else:
-                                last_date = (datetime.strptime(last, '%Y-%m-%d') - timedelta(days=2)).strftime('%Y-%m-%d')
-                    except Exception:
-                        pass
-
-                if need_fetch:
-                    df = _fetch_with_timeout(code, last_date, today, PER_STOCK_TIMEOUT)
-                    df = _validate_and_clean(df)
-                    if df is not None and len(df) > 0:
-                        # 检测除权除息: 新旧重叠日 close 价不同 → 前复权调整, 需全量重拉
-                        need_full = False
-                        if stock_file.exists():
-                            try:
-                                old = pd.read_csv(stock_file)
-                                overlap_date = df['date'].iloc[0]
-                                old_row = old[old['date'] == overlap_date]
-                                if len(old_row) > 0:
-                                    old_close = float(old_row['close'].iloc[0])
-                                    new_close = float(df[df['date'] == overlap_date]['close'].iloc[0])
-                                    if abs(old_close - new_close) > 0.01:
-                                        logger.info(f"[{code}] 除权除息检测到, 全量重拉")
-                                        need_full = True
-                                if not need_full:
-                                    combined = pd.concat([old, df], ignore_index=True)
-                                    combined = combined.drop_duplicates(subset=['date'], keep='last')
-                                    combined = combined.sort_values('date').reset_index(drop=True)
-                                    combined.to_csv(stock_file, index=False)
-                            except Exception:
-                                df.to_csv(stock_file, index=False)
-                        else:
-                            df.to_csv(stock_file, index=False)
-
-                        if need_full:
-                            # 全量重拉替换旧文件
-                            full_df = _fetch_with_timeout(code, start_date, today, PER_STOCK_TIMEOUT)
-                            full_df = _validate_and_clean(full_df)
-                            if full_df is not None and len(full_df) > 0:
-                                full_df.to_csv(stock_file, index=False)
-                            else:
-                                fail += 1
-                                failed_stocks.append(code)
-                        updated += 1
+            scan_workers = min(16, len(stocks))
+            print(f"Phase 1: {scan_workers} 线程扫描 {total_stocks} 只股票...")
+            tasks = [(code, str(DATA_DIR / f"{code.replace('.', '_')}.csv")) for code in stocks]
+            to_fetch = []
+            with ThreadPoolExecutor(max_workers=scan_workers) as scanner:
+                for code, need, last_d, sf in scanner.map(_check_one, tasks):
+                    if need:
+                        to_fetch.append((code, last_d, sf))
                     else:
-                        fail += 1
-                        failed_stocks.append(code)
-                else:
-                    skip += 1
+                        skip += 1
+            print(f"  需更新: {len(to_fetch)} 只, 已跳过: {skip} 只")
 
-            else:
-                # 全量模式
+            # ── Phase 2: 主线程串行 API 拉取 + 多线程 CSV 合并 ──
+            csv_workers = min(8, max(1, len(to_fetch)))
+            csv_executor = ThreadPoolExecutor(max_workers=csv_workers)
+            csv_futures = []
+
+            from tqdm import tqdm
+            pbar = tqdm(to_fetch, desc="Phase 2: API拉取", unit="只")
+            for code, last_d, stock_file_str in pbar:
+                df = _fetch_with_timeout(code, last_d, today, PER_STOCK_TIMEOUT)
+                df = _validate_and_clean(df)
+                stock_file = Path(stock_file_str)
+
+                if df is not None and len(df) > 0:
+                    csv_futures.append((
+                        code,
+                        csv_executor.submit(_merge_and_save, stock_file, df, True),
+                        stock_file
+                    ))
+                    updated += 1
+                else:
+                    fail += 1
+                    failed_stocks.append(code)
+
+                pbar.set_postfix(updated=updated, fail=fail)
+                if (updated + fail) % 50 == 0:
+                    try: bs.logout()
+                    except: pass
+                    if not login():
+                        logger.error("重新登录失败, 继续尝试...")
+
+            # 等 CSV 写入, 处理除权除息
+            print(f"\n等待 CSV 合并完成...")
+            for code, fut, stock_file in tqdm(csv_futures, desc="Phase 3: CSV合并", unit="只"):
+                try:
+                    ok, need_full_refetch = fut.result(timeout=30)
+                    if need_full_refetch:
+                        logger.info(f"[{code}] 除权除息, 全量重拉")
+                        full_df = _fetch_with_timeout(code, start_date, today, PER_STOCK_TIMEOUT)
+                        full_df = _validate_and_clean(full_df)
+                        if full_df is not None and len(full_df) > 0:
+                            full_df.to_csv(stock_file, index=False)
+                except Exception as e:
+                    logger.warning(f"[{code}] CSV合并失败: {e}")
+
+            csv_executor.shutdown(wait=True)
+
+        else:
+            # 全量模式 (单进程)
+            for i, code in enumerate(stocks):
+                stock_file = DATA_DIR / f"{code.replace('.', '_')}.csv"
                 if stock_file.exists() and not force:
                     skip += 1
                 else:
@@ -322,35 +395,17 @@ def main():
                         failed_stocks.append(code)
                         logger.warning(f"[{code}] 失败，已记录 (累计失败: {fail})")
 
-            # 每50次重新登录 (skip 也会走到这里)
-            if (i + 1) % 50 == 0:
-                try:
-                    logout()
-                except Exception:
-                    pass
-                # 重试登录, 失败不退出, 继续用旧连接
-                for retry in range(3):
-                    if login():
-                        break
-                    time.sleep(2)
-                else:
-                    logger.warning(f"重新登录失败, 继续尝试...")
-                if refresh:
-                    logger.info(f"[{i+1}/{total_stocks}] re-login, updated={updated}, skip={skip}, fail={fail}")
-                else:
+                if (i + 1) % 50 == 0:
+                    try: logout()
+                    except: pass
+                    for retry in range(3):
+                        if login(): break
+                        time.sleep(2)
                     logger.info(f"[{i+1}/{total_stocks}] re-login, success={success}, skip={skip}, fail={fail}")
-
-            # 进度 & 限速
-            if (i + 1) % 200 == 0:
-                if refresh:
-                    logger.info(f"[{i+1}/{total_stocks}] updated={updated}, skip={skip}, fail={fail}")
-                else:
+                if (i + 1) % 200 == 0:
                     logger.info(f"[{i+1}/{total_stocks}] success={success}, skip={skip}, fail={fail}")
-                time.sleep(0.3)
+                    time.sleep(0.3)
 
-        if refresh:
-            logger.info(f"第一轮完成! updated={updated}, skip={skip}, fail={fail}")
-        else:
             logger.info(f"第一轮完成! success={success}, skip={skip}, fail={fail}")
 
         # ─── 自动重试失败股票 ───

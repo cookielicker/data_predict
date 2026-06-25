@@ -23,10 +23,12 @@ from matplotlib.gridspec import GridSpec
 PREVIOUS_NUM = 30
 PREDICT_NUM = 3
 PP = PREVIOUS_NUM + PREDICT_NUM  # 33
-INPUT_DIM = PREVIOUS_NUM * 4     # 120
+FEATURE_DIM = 8
+INPUT_DIM = PREVIOUS_NUM * FEATURE_DIM  # 240
 
-LABEL_NAMES = {0: "L0 (跌 >10%)", 1: "L1 (震荡)", 2: "L2 (涨 >10%)"}
-LABEL_COLORS = {0: "#e74c3c", 1: "#95a5a6", 2: "#2ecc71"}
+LABEL_NAMES = {0: "L0 (跌>10%)", 1: "L1 (-10%~0)", 2: "L2 (0~10%)", 3: "L3 (涨>10%)"}
+LABEL_COLORS = {0: "#e74c3c", 1: "#e67e22", 2: "#3498db", 3: "#2ecc71"}
+NUM_CLASSES = 4
 
 
 def _cal_pct(d):
@@ -107,8 +109,9 @@ class ModelPredictionViewer:
 
         _add_filter_btn("All", "all", "#3a3a3a", "#ecf0f1")
         _add_filter_btn("Pred L0", "pred_l0", "#5a2020", "#e74c3c")
-        _add_filter_btn("Pred L1", "pred_l1", "#3a3a3a", "#95a5a6")
-        _add_filter_btn("Pred L2", "pred_l2", "#204020", "#2ecc71")
+        _add_filter_btn("Pred L1", "pred_l1", "#4a2000", "#e67e22")
+        _add_filter_btn("Pred L2", "pred_l2", "#002040", "#3498db")
+        _add_filter_btn("Pred L3", "pred_l3", "#204020", "#2ecc71")
 
         tk.Label(filt, text="  |  ", bg="#2b2b2b", fg="#555555").pack(side=tk.LEFT, padx=4)
 
@@ -160,14 +163,13 @@ class ModelPredictionViewer:
 
         # ── Matplotlib ──
         self.fig = Figure(figsize=(13, 9), facecolor="#2b2b2b")
-        gs = GridSpec(4, 1, figure=self.fig, height_ratios=[2.5, 1, 1.5, 1.5],
+        gs = GridSpec(3, 1, figure=self.fig, height_ratios=[3, 2, 2],
                       top=0.97, bottom=0.05, left=0.08, right=0.93, hspace=0.08)
-        self.ax1 = self.fig.add_subplot(gs[0])
-        self.ax2 = self.fig.add_subplot(gs[1], sharex=self.ax1)
-        self.ax3 = self.fig.add_subplot(gs[2])
-        self.ax4 = self.fig.add_subplot(gs[3])
+        self.ax_price = self.fig.add_subplot(gs[0])
+        self.ax_turnover = self.fig.add_subplot(gs[1])
+        self.ax_delta = self.fig.add_subplot(gs[2])
 
-        for ax in [self.ax1, self.ax2, self.ax3, self.ax4]:
+        for ax in [self.ax_price, self.ax_turnover, self.ax_delta]:
             ax.set_facecolor("#1e1e1e")
             ax.tick_params(colors="#aaaaaa")
             ax.spines["bottom"].set_color("#555555")
@@ -294,7 +296,7 @@ class ModelPredictionViewer:
             return
 
         from models.fcmodel import FCmodel
-        self.model = FCmodel(INPUT_DIM, num_class=3, hidden_size=256, num_layers=4)
+        self.model = FCmodel(feature_dim=FEATURE_DIM, num_class=NUM_CLASSES, hidden_size=256, num_layers=4, seq_len=PREVIOUS_NUM)
         state = torch.load(path, map_location=self.device)
         self.model.load_state_dict(state)
         self.model.to(self.device)
@@ -327,28 +329,24 @@ class ModelPredictionViewer:
             batch_raw = self._test_raw[start:end]
             batch_n = end - start
 
-            # Extract features (vectorized)
-            mean = batch_raw[:, :PP]                     # (B, 33)
-            change = batch_raw[:, PP:2*PP]               # (B, 33)
-            hl = batch_raw[:, 2*PP:3*PP]                 # (B, 33)
-            change_delta = batch_raw[:, 3*PP:4*PP]       # (B, 33)
+            # Extract 7 features
+            pct     = batch_raw[:, 0*PP:1*PP]; ampl   = batch_raw[:, 1*PP:2*PP]
+            daychg  = batch_raw[:, 2*PP:3*PP]
+            chg     = batch_raw[:, 3*PP:4*PP]; cd_    = batch_raw[:, 4*PP:5*PP]
+            bb_pos  = batch_raw[:, 5*PP:6*PP]; bb_w   = batch_raw[:, 6*PP:7*PP]
+            rsi     = batch_raw[:, 7*PP:8*PP]
 
-            price_pct = np.zeros((batch_n, PREVIOUS_NUM), dtype=np.float32)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                diff = mean[:, 1:PREVIOUS_NUM] - mean[:, :PREVIOUS_NUM-1]
-                pct = diff / mean[:, :PREVIOUS_NUM-1]
-                pct = np.where(np.isfinite(pct), pct, 0)
-                price_pct[:, 1:] = pct
-
-            # Label
-            pct_chg = (mean[:, -1] - mean[:, PREVIOUS_NUM - 1]) / mean[:, PREVIOUS_NUM - 1]
-            labels = np.where(pct_chg < -0.1, 0, np.where(pct_chg > 0.1, 2, 1))
+            pct_chg = (1+pct[:, PREVIOUS_NUM])*(1+pct[:, PREVIOUS_NUM+1])*(1+pct[:, PREVIOUS_NUM+2]) - 1
+            labels = np.zeros(batch_n, dtype=np.int64)
+            labels = np.where(pct_chg < -0.1, 0,
+                     np.where(pct_chg < 0, 1,
+                     np.where(pct_chg <= 0.1, 2, 3)))
 
             features = np.concatenate([
-                price_pct,
-                change[:, :PREVIOUS_NUM],
-                hl[:, :PREVIOUS_NUM],
-                change_delta[:, :PREVIOUS_NUM],
+                pct[:, :PREVIOUS_NUM], ampl[:, :PREVIOUS_NUM], daychg[:, :PREVIOUS_NUM],
+                chg[:, :PREVIOUS_NUM], cd_[:, :PREVIOUS_NUM],
+                bb_pos[:, :PREVIOUS_NUM], bb_w[:, :PREVIOUS_NUM],
+                rsi[:, :PREVIOUS_NUM],
             ], axis=1)
 
             self._all_features[start:end] = features
@@ -367,7 +365,7 @@ class ModelPredictionViewer:
                     pass
 
         # Confusion summary
-        cm = np.zeros((3, 3), dtype=np.int64)
+        cm = np.zeros((NUM_CLASSES, NUM_CLASSES), dtype=np.int64)
         for p, t in zip(self._predictions, self._true_labels):
             cm[p][t] += 1
 
@@ -413,6 +411,8 @@ class ModelPredictionViewer:
             mask = p == 1
         elif mode == "pred_l2":
             mask = p == 2
+        elif mode == "pred_l3":
+            mask = p == 3
         else:
             mask = np.ones(len(p), dtype=bool)
 
@@ -490,29 +490,32 @@ class ModelPredictionViewer:
         raw = self._test_raw[test_idx]
         stock_code = self._test_codes[test_idx] if self._test_codes is not None else "?"
 
-        mean = raw[:PP]
-        change = raw[PP:2 * PP]
-        hl = raw[2 * PP:3 * PP]
-        change_delta = raw[3 * PP:4 * PP]
-        price_pct = _cal_pct(mean[:PREVIOUS_NUM])
+        pct     = raw[0*PP:1*PP]; ampl   = raw[1*PP:2*PP]
+        daychg  = raw[2*PP:3*PP]
+        chg     = raw[3*PP:4*PP]; cd_    = raw[4*PP:5*PP]
 
-        true_label, ret_pct = compute_label(mean)
+        pct_chg = (1+pct[PREVIOUS_NUM])*(1+pct[PREVIOUS_NUM+1])*(1+pct[PREVIOUS_NUM+2]) - 1
+        if pct_chg < -0.1: true_label = 0
+        elif pct_chg < 0: true_label = 1
+        elif pct_chg <= 0.1: true_label = 2
+        else: true_label = 3
+        ret_pct = pct_chg
         pred_label = int(self._predictions[test_idx]) if self._predictions is not None else -1
 
         STYLE = dict(facecolor="#1e1e1e", tick_params=dict(colors="#aaaaaa"),
                      grid=dict(alpha=0.15, color="#888888"))
 
         # ── Ax1: Price ──
-        ax = self.ax1
+        ax = self.ax_price
         ax.clear()
         ax.set_facecolor(STYLE["facecolor"])
         days = np.arange(PP)
-        ax.plot(days, mean, color="#3498db", linewidth=1.3, marker="o", markersize=3)
+        ax.plot(days, close_p, color="#3498db", linewidth=1.3, marker="o", markersize=3)
         ax.axvspan(PREVIOUS_NUM - 1, PP - 1, alpha=0.10, color="#f39c12")
         ax.axvline(x=PREVIOUS_NUM - 1, color="#f39c12", linestyle="--", linewidth=1.2)
-        ax.scatter([PREVIOUS_NUM - 1], [mean[PREVIOUS_NUM - 1]], color="#e74c3c", s=40, zorder=5,
+        ax.scatter([PREVIOUS_NUM - 1], [pct[PREVIOUS_NUM - 1]], color="#e74c3c", s=40, zorder=5,
                    label="day 29 (history end)")
-        ax.scatter([PP - 1], [mean[-1]],
+        ax.scatter([PP - 1], [close_p[-1]],
                    color="#2ecc71" if ret_pct >= 0 else "#e74c3c", s=55, zorder=5, marker="D",
                    label="day 32 (target)")
 
@@ -541,58 +544,29 @@ class ModelPredictionViewer:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
-        # ── Ax2: Price pct_change ──
-        ax = self.ax2
+        # ── Ax2: Turnover ──
+        ax = self.ax_turnover
         ax.clear()
         ax.set_facecolor(STYLE["facecolor"])
         x = np.arange(PREVIOUS_NUM)
-        colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in price_pct]
-        ax.bar(x, price_pct, color=colors, width=0.7, alpha=0.85)
-        ax.axhline(y=0, color="#666666", linewidth=0.8)
-        ax.set_ylabel("Δ%", color="#bbbbbb", fontsize=9)
-        ax.set_xlabel("Day (price 折线图每个相邻点的涨跌幅度)", color="#888888", fontsize=8)
+        ax.bar(x, chg[:PREVIOUS_NUM], width=0.7, color="#9b59b6", alpha=0.8, label="change_rate")
+        ax.set_xlabel("Day (0-29 = 30-day history)", color="#888888", fontsize=8)
+        ax.set_ylabel("Turnover", color="#9b59b6")
+        ax.set_title("Turnover (change_rate)", color="#cccccc", fontsize=10)
         ax.grid(True, axis="y", **STYLE["grid"])
         ax.tick_params(**STYLE["tick_params"])
         for sp in ax.spines.values():
             sp.set_color("#555555")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        ax.set_xlim(-0.5, PP - 0.5)
-
-        # ── Ax3: Turnover + Volatility ──
-        ax = self.ax3
-        ax.clear()
-        if hasattr(self, '_ax3_twinx') and self._ax3_twinx in self.fig.axes:
-            self.fig.delaxes(self._ax3_twinx)
-        ax.set_facecolor(STYLE["facecolor"])
-        x = np.arange(PREVIOUS_NUM)
-        ax.bar(x - 0.15, change[:PREVIOUS_NUM], width=0.3,
-               color="#9b59b6", alpha=0.8, label="change_rate (换手率)")
-        ax2_ = ax.twinx()
-        self._ax3_twinx = ax2_
-        ax2_.bar(x + 0.15, hl[:PREVIOUS_NUM], width=0.3,
-                 color="#1abc9c", alpha=0.8, label="high_low_ratio (波动率)")
-        ax.set_xlabel("Day (0-29 = 30-day history)", color="#888888", fontsize=8)
-        ax.set_ylabel("Turnover", color="#9b59b6")
-        ax2_.set_ylabel("Volatility", color="#1abc9c")
-        ax.set_title("Turnover & Volatility", color="#cccccc", fontsize=10)
-        ax.grid(True, axis="y", **STYLE["grid"])
-        ax.tick_params(**STYLE["tick_params"])
-        ax2_.tick_params(**STYLE["tick_params"])
-        for sp in list(ax.spines.values()) + list(ax2_.spines.values()):
-            sp.set_color("#555555")
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2_.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=8,
-                  facecolor="#333333", edgecolor="#555555", labelcolor="#cccccc")
 
         # ── Ax4: Change rate delta ──
-        ax = self.ax4
+        ax = self.ax_delta
         ax.clear()
         ax.set_facecolor(STYLE["facecolor"])
         x = np.arange(PREVIOUS_NUM)
-        delta_colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in change_delta[:PREVIOUS_NUM]]
-        ax.bar(x, change_delta[:PREVIOUS_NUM], color=delta_colors, width=0.6, alpha=0.85)
+        delta_colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in cd_[:PREVIOUS_NUM]]
+        ax.bar(x, cd_[:PREVIOUS_NUM], color=delta_colors, width=0.6, alpha=0.85)
         ax.axhline(y=0, color="#666666", linewidth=0.8)
         ax.set_xlabel("Day (0-29 = 30-day history)", color="#888888", fontsize=8)
         ax.set_ylabel("Δ Turnover", color="#bbbbbb")

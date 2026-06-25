@@ -47,7 +47,7 @@ class MLPClassifier(nn.Module):
 
 class LSTMModel(nn.Module):
     """LSTM 序列模型 — 统一输入 [bs, seq_len, feature_dim]"""
-    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+    def __init__(self, feature_dim=8, seq_len=30, num_class=4,
                  hidden_size=256, num_layers=2, dropout=0.3):
         super().__init__()
         self.feature_dim = feature_dim
@@ -90,7 +90,7 @@ class LSTMModel(nn.Module):
 
 class EncoderModel(nn.Module):
     """Transformer Encoder — 统一输入 [bs, seq_len, feature_dim]"""
-    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+    def __init__(self, feature_dim=8, seq_len=30, num_class=4,
                  d_model=128, nhead=4, num_layers=3, dropout=0.3):
         super().__init__()
         self.feature_dim = feature_dim
@@ -139,7 +139,7 @@ class EncoderModel(nn.Module):
 
 class DecoderTransformerModel(nn.Module):
     """Decoder-only Transformer — 统一输入 [bs, seq_len, feature_dim]"""
-    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+    def __init__(self, feature_dim=8, seq_len=30, num_class=4,
                  d_model=128, nhead=4, num_layers=3, dropout=0.3):
         super().__init__()
         self.feature_dim = feature_dim
@@ -251,7 +251,7 @@ class MoEDecoderLayer(nn.Module):
 
 class DecoderTransformerModelMoE(nn.Module):
     """MoE Decoder Transformer — 统一输入 [bs, seq_len, feature_dim]"""
-    def __init__(self, feature_dim=4, seq_len=30, num_class=4,
+    def __init__(self, feature_dim=8, seq_len=30, num_class=4,
                  d_model=128, nhead=4, num_layers=3, num_experts=4, top_k=1, dropout=0.3):
         super().__init__()
         self.feature_dim = feature_dim

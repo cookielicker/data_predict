@@ -4,7 +4,12 @@
 *.pt
 dataset/
 dataset_30/
-stock_data/*.csv
-stock_data/all_a_stocks_clean.csv
+stock_data/
+baostock_dataset_30/
+middle_data/
+middle_data_baostock/
 __pycache__/
 EXPERIMENT_LOG.md
+.claude/
+fetch_baostock.log
+fetch_baostock.out

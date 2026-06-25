@@ -87,20 +87,22 @@ class DS:
     def __getitem__(self, idx):
         raw = self.data[idx]
         pp = self.previous + self.predict
-        mean = raw[:pp]
-        change = raw[pp:2*pp]
-        high_low = raw[2*pp:3*pp]
-        change_delta = raw[3*pp:4*pp]
-
-        price_pct = self._cal_pct(mean[:self.previous])
-        pct_chg = (mean[-1] - mean[self.previous - 1]) / mean[self.previous - 1]
+        pct     = raw[0*pp:1*pp]; ampl   = raw[1*pp:2*pp]
+        daychg  = raw[2*pp:3*pp]
+        chg     = raw[3*pp:4*pp]; cd_    = raw[4*pp:5*pp]
+        bb_pos  = raw[5*pp:6*pp]; bb_w   = raw[6*pp:7*pp]
+        rsi     = raw[7*pp:8*pp]
+        pct_chg = (1+pct[self.previous])*(1+pct[self.previous+1])*(1+pct[self.previous+2]) - 1
         # 4-class label
         if pct_chg < -0.1: label = 0
         elif pct_chg < 0: label = 1
         elif pct_chg <= 0.1: label = 2
         else: label = 3
 
-        features = np.stack([price_pct, change[:self.previous], high_low[:self.previous], change_delta[:self.previous]], axis=-1)
+        features = np.stack([pct[:self.previous], ampl[:self.previous], daychg[:self.previous],
+                             chg[:self.previous], cd_[:self.previous],
+                             bb_pos[:self.previous], bb_w[:self.previous],
+                             rsi[:self.previous]], axis=-1)
         return features.astype(np.float32), label
 
 class DSShared(Dataset):
@@ -179,7 +181,7 @@ def main():
     # 计算数据文件总大小，判断是否能放到共享内存
     files = sorted([f for f in os.listdir(DATASET_PATH) if f.endswith('.npy')])
     total_bytes = sum(os.path.getsize(os.path.join(DATASET_PATH, f)) for f in files)
-    IN_MEMORY_THRESHOLD = 8 * 1024**3  # 8GB
+    IN_MEMORY_THRESHOLD = 6 * 1024**3  # 6GB
 
     global _global_data
 
@@ -188,7 +190,7 @@ def main():
         # 加载数据到共享内存
         all_data = []
         for f in files:
-            all_data.append(np.load(os.path.join(DATASET_PATH, f)))
+            all_data.append(np.load(os.path.join(DATASET_PATH, f)).astype(np.float32))
         all_data = np.concatenate(all_data, axis=0)
         print(f'Data shape: {all_data.shape}')
         # Shuffle
@@ -219,7 +221,7 @@ def main():
         # 单进程模式，直接传numpy数组
         all_data = []
         for f in files:
-            all_data.append(np.load(os.path.join(DATASET_PATH, f)))
+            all_data.append(np.load(os.path.join(DATASET_PATH, f)).astype(np.float32))
         all_data = np.concatenate(all_data, axis=0)
         print(f'Data shape: {all_data.shape}')
         # Shuffle
@@ -251,22 +253,22 @@ def main():
     if MODEL_TYPE == "encoder":
         from models.sequence_models import EncoderModel
         print(f'输入维度: ({PREVIOUS_NUM}, 4) (Encoder)')
-        model = EncoderModel(feature_dim=4, seq_len=PREVIOUS_NUM, num_class=n_classes,
+        model = EncoderModel(feature_dim=8, seq_len=PREVIOUS_NUM, num_class=n_classes,
                                  d_model=D_MODEL, num_layers=NUM_LAYERS).to(device)
     elif MODEL_TYPE == "decoder":
         from models.sequence_models import DecoderTransformerModel
         print(f'输入维度: ({PREVIOUS_NUM}, 4) (Decoder)')
-        model = DecoderTransformerModel(feature_dim=4, seq_len=PREVIOUS_NUM, num_class=n_classes,
+        model = DecoderTransformerModel(feature_dim=8, seq_len=PREVIOUS_NUM, num_class=n_classes,
                                         d_model=D_MODEL, num_layers=NUM_LAYERS).to(device)
     elif MODEL_TYPE == "moe":
         from models.sequence_models import DecoderTransformerModelMoE
         print(f'输入维度: ({PREVIOUS_NUM}, 4) (MoE Decoder)')
-        model = DecoderTransformerModelMoE(feature_dim=4, seq_len=PREVIOUS_NUM, num_class=n_classes,
+        model = DecoderTransformerModelMoE(feature_dim=8, seq_len=PREVIOUS_NUM, num_class=n_classes,
                                            d_model=D_MODEL, num_layers=NUM_LAYERS).to(device)
     else:
         from models.FCmodel import FCmodel
         print(f'输入维度: ({PREVIOUS_NUM}, 4) (FC)')
-        model = FCmodel(feature_dim=4, seq_len=PREVIOUS_NUM, num_class=n_classes,
+        model = FCmodel(feature_dim=8, seq_len=PREVIOUS_NUM, num_class=n_classes,
                         hidden_size=HIDDEN_SIZE, num_layers=NUM_LAYERS).to(device)
 
     criterion = nn.CrossEntropyLoss(weight=torch.tensor(WEIGHTS).float().to(device))

@@ -38,7 +38,7 @@ class MLPBlock(nn.Module):
 
 class FCmodel(nn.Module):
     """统一输入 [bs, seq_len, feature_dim], 输出 [bs, num_class]"""
-    def __init__(self, feature_dim=4, num_class=4, hidden_size=256, num_layers=4, seq_len=30):
+    def __init__(self, feature_dim=8, num_class=4, hidden_size=256, num_layers=4, seq_len=30):
         super().__init__()
         self.feature_dim = feature_dim
         self.seq_len = seq_len

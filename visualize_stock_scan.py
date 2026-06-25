@@ -27,7 +27,8 @@ import pandas as pd
 PREVIOUS_NUM = 30
 PREDICT_NUM = 3
 PP = PREVIOUS_NUM + PREDICT_NUM  # 33
-INPUT_DIM = PREVIOUS_NUM * 4     # 120
+FEATURE_DIM = 8
+INPUT_DIM = PREVIOUS_NUM * FEATURE_DIM  # 240
 
 LABEL_NAMES = {0: "L0 (跌>10%)", 1: "L1 (-10%~0)", 2: "L2 (0~10%)", 3: "L3 (涨>10%)"}
 LABEL_COLORS = {0: "#e74c3c", 1: "#e67e22", 2: "#3498db", 3: "#2ecc71"}
@@ -48,10 +49,37 @@ def compute_features_and_label(df, end_idx):
     if len(hist) < PREVIOUS_NUM:
         return None
 
-    mean_adj = ((hist['open'] + hist['high'] + hist['low'] + hist['close']) / 4).values.astype(np.float32)
+    # 均价 + 日内指标
+    avg_price = ((hist['high'] + hist['low'] + hist['close']) / 3).values.astype(np.float32)
+    prev_avg = np.roll(avg_price, 1); prev_avg[0] = avg_price[0]
+    with np.errstate(divide='ignore', invalid='ignore'):
+        price_pct = np.where(prev_avg > 0, avg_price / prev_avg - 1, 0).astype(np.float32)
+        amplitude = np.where(avg_price > 0, (hist['high'] - hist['low']).values / avg_price, 0).astype(np.float32)
+        day_chg   = np.where(avg_price > 0, (hist['close'] - hist['open']).values / avg_price, 0).astype(np.float32)
+
+    # RSI
+    close_s = hist['close'].values.astype(np.float64)
+    rsi_diff = np.diff(close_s, prepend=close_s[0])
+    rsi_gain = np.where(rsi_diff > 0, rsi_diff, 0)
+    rsi_loss = np.where(rsi_diff < 0, -rsi_diff, 0)
+    rsi_avg_gain = pd.Series(rsi_gain).rolling(14, min_periods=14).mean().values.astype(np.float32)
+    rsi_avg_loss = pd.Series(rsi_loss).rolling(14, min_periods=14).mean().values.astype(np.float32)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rsi = np.where(rsi_avg_loss > 0, 1 - 1/(1 + rsi_avg_gain/rsi_avg_loss), 0.5).astype(np.float32)
+    close_s = close_s.astype(np.float32)
+
+    # 布林带
+    roll_mean = pd.Series(close_s).rolling(20, min_periods=20).mean().values.astype(np.float32)
+    roll_std  = pd.Series(close_s).rolling(20, min_periods=20).std().values.astype(np.float32)
+    upper = roll_mean + 2 * roll_std
+    lower = roll_mean - 2 * roll_std
+    with np.errstate(divide='ignore', invalid='ignore'):
+        bb_pos = np.where(upper > lower, (close_s - lower) / (upper - lower), 0.5).astype(np.float32)
+        bb_w   = np.where(roll_mean > 0, (upper - lower) / roll_mean, 0).astype(np.float32)
+        bb_pos = np.where(np.isfinite(bb_pos), bb_pos, 0.5)
+        bb_w   = np.where(np.isfinite(bb_w), bb_w, 0)
+
     change_rate = (hist['turn'].fillna(0) / 100.0).values.astype(np.float32)
-    high_low_ratio = ((hist['high'] - hist['low']) / mean_adj).values.astype(np.float32)
-    high_low_ratio = np.where(np.isfinite(high_low_ratio), high_low_ratio, 0)
 
     change_delta = np.zeros(PREVIOUS_NUM, dtype=np.float32)
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -60,17 +88,9 @@ def compute_features_and_label(df, end_idx):
                         (change_rate[1:] - change_rate[:-1]) / change_rate[:-1], 0)
         change_delta[:] = d
 
-    price_pct = np.zeros(PREVIOUS_NUM, dtype=np.float32)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        r = np.zeros(PREVIOUS_NUM)
-        r[1:] = np.where(mean_adj[:PREVIOUS_NUM-1] != 0,
-                        (mean_adj[1:PREVIOUS_NUM] - mean_adj[:PREVIOUS_NUM-1])
-                        / mean_adj[:PREVIOUS_NUM-1], 0)
-        price_pct[:] = r
-
     features = np.stack([
-        price_pct, change_rate[:PREVIOUS_NUM],
-        high_low_ratio[:PREVIOUS_NUM], change_delta[:PREVIOUS_NUM],
+        price_pct, amplitude, day_chg,
+        change_rate, change_delta, bb_pos, bb_w, rsi,
     ], axis=-1).astype(np.float32)
 
     # True label: end_idx 后最多3天
@@ -81,16 +101,12 @@ def compute_features_and_label(df, end_idx):
     ret_pct = 0.0
     true_days_info = ""
 
-    fut_mean = np.array([], dtype=np.float32)
-    fut_dates = []
     if future_days > 0:
         fut = df.iloc[future_start:future_end]
-        fut_mean = ((fut['open'] + fut['high'] + fut['low'] + fut['close']) / 4).values.astype(np.float32)
-        fut_dates = fut['date'].apply(lambda x: x[5:] if len(str(x)) >= 10 else str(x)).tolist()
-        if len(fut_mean) > 0 and mean_adj[-1] != 0:
-            ret_pct = (fut_mean[-1] - mean_adj[-1]) / mean_adj[-1]
+        fut_close = fut['close'].values.astype(np.float32)
+        if len(fut_close) > 0 and hist['close'].iloc[-1] != 0:
+            ret_pct = fut_close[-1] / float(hist['close'].iloc[-1]) - 1
             if np.isfinite(ret_pct):
-                # 4-class: L0<-10%, L1 -10%~0, L2 0~10%, L3 >10%
                 if ret_pct < -0.1: true_label = 0
                 elif ret_pct < 0: true_label = 1
                 elif ret_pct <= 0.1: true_label = 2
@@ -104,13 +120,31 @@ def compute_features_and_label(df, end_idx):
     date = df['date'].iloc[end_idx] if 'date' in df.columns else '?'
     hist_dates = hist['date'].apply(lambda x: x[5:] if len(str(x)) >= 10 else str(x)).tolist()
 
+    # OHLC 原始数据 (用于蜡烛图)
+    o_vals = hist['open'].values.astype(np.float32)
+    h_vals = hist['high'].values.astype(np.float32)
+    l_vals = hist['low'].values.astype(np.float32)
+    c_vals = hist['close'].values.astype(np.float32)
+
+    # 未来数据 (用于预测日蜡烛图)
+    fut_o = np.array([], dtype=np.float32); fut_h = np.array([], dtype=np.float32)
+    fut_l = np.array([], dtype=np.float32); fut_c = np.array([], dtype=np.float32)
+    fut_dates = []
+    if future_days > 0:
+        fut = df.iloc[future_start:future_end]
+        fut_o = fut['open'].values.astype(np.float32); fut_h = fut['high'].values.astype(np.float32)
+        fut_l = fut['low'].values.astype(np.float32); fut_c = fut['close'].values.astype(np.float32)
+        fut_dates = fut['date'].apply(lambda x: x[5:] if len(str(x)) >= 10 else str(x)).tolist()
+
     raw_data = {
-        'mean_adj': mean_adj, 'change_rate': change_rate,
-        'high_low_ratio': high_low_ratio, 'change_delta': change_delta,
-        'price_pct': price_pct, 'date': date, 'hist_dates': hist_dates,
+        'price_pct': price_pct, 'change_rate': change_rate,
+        'change_delta': change_delta,
+        'open': o_vals, 'high': h_vals, 'low': l_vals, 'close': c_vals,
+        'date': date, 'hist_dates': hist_dates,
         'stock_code': code, 'true_label': true_label, 'return_pct': ret_pct,
         'future_days': future_days, 'true_days_info': true_days_info,
-        'fut_mean': fut_mean, 'fut_dates': fut_dates,
+        'fut_open': fut_o, 'fut_high': fut_h, 'fut_low': fut_l, 'fut_close': fut_c,
+        'fut_dates': fut_dates,
     }
     return features, raw_data
 
@@ -275,7 +309,7 @@ class StockScanViewer:
         )
         if not path: return
         from models.FCmodel import FCmodel
-        self.model = FCmodel(feature_dim=4, num_class=NUM_CLASSES, hidden_size=256, num_layers=4, seq_len=PREVIOUS_NUM)
+        self.model = FCmodel(feature_dim=FEATURE_DIM, num_class=NUM_CLASSES, hidden_size=256, num_layers=4, seq_len=PREVIOUS_NUM)
         state = torch.load(path, map_location=self.device)
         self.model.load_state_dict(state)
         self.model.to(self.device)
@@ -545,46 +579,60 @@ class StockScanViewer:
 
     # ─── Drawing ─────────────────────────────────────────────────────
     def _draw_impl(self, raw, pred, probs, code, name):
-        mean = raw['mean_adj']
+        price_pct = raw['price_pct']
         change = raw['change_rate']
-        hl = raw['high_low_ratio']
         change_delta = raw['change_delta']
+        o = raw['open']; h = raw['high']; l = raw['low']; c = raw['close']
         date = raw['date']
         true_label = raw['true_label']
         ret_pct = raw['return_pct']
         future_days = raw['future_days']
         true_days_info = raw['true_days_info']
         hist_dates = raw['hist_dates']
+        fut_o = raw.get('fut_open', np.array([], dtype=np.float32))
+        fut_h = raw.get('fut_high', np.array([], dtype=np.float32))
+        fut_l = raw.get('fut_low', np.array([], dtype=np.float32))
+        fut_c = raw.get('fut_close', np.array([], dtype=np.float32))
+        fut_dates = raw.get('fut_dates', [])
 
         STYLE = dict(facecolor="#1e1e1e", tick_params=dict(colors="#aaaaaa"),
                      grid=dict(alpha=0.15, color="#888888"))
 
-        # ── Top: Price ──
+        # ── Top: Candlestick (OHLC) ──
         ax = self.ax_price
         ax.clear()
         ax.set_facecolor(STYLE["facecolor"])
 
-        # 拼接历史+未来数据
-        fut_mean = raw.get('fut_mean', np.array([], dtype=np.float32))
-        fut_dates = raw.get('fut_dates', [])
-        all_price = np.concatenate([mean, fut_mean]) if len(fut_mean) > 0 else mean
-        all_dates = hist_dates + fut_dates
-        n_hist = len(mean)
-        n_fut = len(fut_mean)
-        n_all = len(all_price)
+        n_hist = len(c)
+        days = np.arange(n_hist)
+        # 蜡烛图
+        body_w = 0.6
+        for i in range(n_hist):
+            color = "#e74c3c" if c[i] >= o[i] else "#2ecc71"
+            # 影线 (high-low)
+            ax.plot([i, i], [l[i], h[i]], color=color, linewidth=0.8)
+            # 实体 (open-close)
+            body_bottom = min(o[i], c[i])
+            body_height = abs(c[i] - o[i])
+            ax.bar(i, body_height, body_w, bottom=body_bottom, color=color, alpha=0.9, edgecolor=color, linewidth=0.3)
 
-        days = np.arange(n_all)
-        # 历史部分蓝色, 未来(target)部分橙色
-        ax.plot(days[:n_hist], mean, color="#3498db", linewidth=1.3, marker="o", markersize=3)
+        # 未来预测日 (橙色蜡烛)
+        n_fut = len(fut_c)
         if n_fut > 0:
-            ax.plot(days[n_hist-1:], all_price[n_hist-1:], color="#f39c12", linewidth=1.6, marker="D", markersize=5)
-            ax.axvspan(n_hist - 1, n_all - 1, alpha=0.10, color="#f39c12")
-            ax.scatter([n_all - 1], [all_price[-1]],
-                       color="#2ecc71" if ret_pct >= 0 else "#e74c3c", s=55, zorder=5, marker="D",
-                       label="target")
+            all_dates = hist_dates + fut_dates
+            for i in range(n_fut):
+                idx = n_hist + i
+                color = "#f39c12"  # 橙色表示预测区
+                ax.plot([idx, idx], [fut_l[i], fut_h[i]], color=color, linewidth=0.8)
+                body_bottom = min(fut_o[i], fut_c[i])
+                body_height = abs(fut_c[i] - fut_o[i])
+                ax.bar(idx, body_height, body_w, bottom=body_bottom, color=color, alpha=0.7, edgecolor=color, linewidth=0.3)
+            ax.axvspan(n_hist - 1, n_hist + n_fut - 1, alpha=0.10, color="#f39c12")
+        else:
+            all_dates = hist_dates
 
         ax.axvline(x=PREVIOUS_NUM - 1, color="#f39c12", linestyle="--", linewidth=1.2)
-        ax.scatter([PREVIOUS_NUM - 1], [mean[PREVIOUS_NUM - 1]], color="#e74c3c", s=40, zorder=5,
+        ax.scatter([PREVIOUS_NUM - 1], [c[PREVIOUS_NUM - 1]], color="#f39c12", s=40, zorder=5,
                    label="history end")
 
         pred_str = LABEL_NAMES.get(pred, f"Pred_{pred}")
@@ -613,41 +661,31 @@ class StockScanViewer:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         # x轴每天标注
+        n_all = n_hist + n_fut
         tick_pos = list(range(0, n_all))
-        tick_labels = [all_dates[i] if i < len(all_dates) else '' for i in tick_pos]
+        tick_labels = all_dates[:n_all]
         ax.set_xticks(tick_pos)
         ax.set_xticklabels(tick_labels, rotation=90, ha='center', fontsize=6, color='#aaaaaa')
 
         # ── Middle: Turnover + Volatility ──
         ax = self.ax_turnover
         ax.clear()
-        if hasattr(self, '_twinx') and self._twinx in self.fig.axes:
-            self.fig.delaxes(self._twinx)
         ax.set_facecolor(STYLE["facecolor"])
         x = np.arange(PREVIOUS_NUM)
-        ax.bar(x - 0.15, change[:PREVIOUS_NUM], width=0.3,
+        ax.bar(x, change[:PREVIOUS_NUM], width=0.7,
                color="#9b59b6", alpha=0.8, label="change_rate")
-        ax2_ = ax.twinx()
-        self._twinx = ax2_
-        ax2_.bar(x + 0.15, hl[:PREVIOUS_NUM], width=0.3,
-                 color="#1abc9c", alpha=0.8, label="high_low_ratio")
         ax.set_ylabel("Turnover", color="#9b59b6")
-        ax2_.set_ylabel("Volatility", color="#1abc9c")
-        ax.set_title("Turnover & Volatility", color="#cccccc", fontsize=10)
+        ax.set_title("Turnover (change_rate)", color="#cccccc", fontsize=10)
         ax.grid(True, axis="y", **STYLE["grid"])
         ax.tick_params(**STYLE["tick_params"])
-        ax2_.tick_params(**STYLE["tick_params"])
-        # 日期
         h_tick_pos = list(range(0, n_hist))
         h_tick_labels = hist_dates[:n_hist]
         ax.set_xticks(h_tick_pos)
         ax.set_xticklabels(h_tick_labels, rotation=90, ha='center', fontsize=6, color='#aaaaaa')
-        for sp in list(ax.spines.values()) + list(ax2_.spines.values()):
+        for sp in ax.spines.values():
             sp.set_color("#555555")
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2_.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=8,
-                  facecolor="#333333", edgecolor="#555555", labelcolor="#cccccc")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
 
         # ── Bottom: Change delta + 日期标签 ──
         ax = self.ax_delta

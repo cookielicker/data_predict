@@ -57,19 +57,21 @@ class DS:
     def __getitem__(self, idx):
         raw = self.data[idx]
         pp = self.previous + self.predict
-        mean = raw[:pp]
-        change = raw[pp:2 * pp]
-        high_low = raw[2 * pp:3 * pp]
-        change_delta = raw[3 * pp:4 * pp]
-
-        price_pct = self._cal_pct(mean[:self.previous])
-        pct_chg = (mean[-1] - mean[self.previous - 1]) / mean[self.previous - 1]
+        pct     = raw[0*pp:1*pp]; ampl   = raw[1*pp:2*pp]
+        daychg  = raw[2*pp:3*pp]
+        chg     = raw[3*pp:4*pp]; cd_    = raw[4*pp:5*pp]
+        bb_pos  = raw[5*pp:6*pp]; bb_w   = raw[6*pp:7*pp]
+        rsi     = raw[7*pp:8*pp]
+        pct_chg = (1+pct[self.previous])*(1+pct[self.previous+1])*(1+pct[self.previous+2]) - 1
         if pct_chg < -0.1: label = 0
         elif pct_chg < 0: label = 1
         elif pct_chg <= 0.1: label = 2
         else: label = 3
 
-        features = np.stack([price_pct, change[:self.previous], high_low[:self.previous], change_delta[:self.previous]], axis=-1)
+        features = np.stack([pct[:self.previous], ampl[:self.previous], daychg[:self.previous],
+                             chg[:self.previous], cd_[:self.previous],
+                             bb_pos[:self.previous], bb_w[:self.previous],
+                             rsi[:self.previous]], axis=-1)
         return features.astype(np.float32), label
 
 
@@ -107,7 +109,10 @@ class DSShared(Dataset):
         elif pct_chg <= 0.1: label = 2
         else: label = 3
 
-        features = np.stack([price_pct, change[:self.previous], high_low[:self.previous], change_delta[:self.previous]], axis=-1)
+        features = np.stack([pct[:self.previous], ampl[:self.previous], daychg[:self.previous],
+                             chg[:self.previous], cd_[:self.previous],
+                             bb_pos[:self.previous], bb_w[:self.previous],
+                             rsi[:self.previous]], axis=-1)
         return features.astype(np.float32), label
 
 
@@ -188,16 +193,16 @@ def load_data(dataset_path, previous, predict, model_type):
 def create_model(model_type, previous, hidden, num_layers, d_model, device, num_class=4):
     if model_type == "encoder":
         from models.sequence_models import EncoderModel
-        return EncoderModel(feature_dim=4, seq_len=previous, num_class=num_class, d_model=d_model, num_layers=num_layers).to(device)
+        return EncoderModel(feature_dim=8, seq_len=previous, num_class=num_class, d_model=d_model, num_layers=num_layers).to(device)
     elif model_type == "decoder":
         from models.sequence_models import DecoderTransformerModel
-        return DecoderTransformerModel(feature_dim=4, seq_len=previous, num_class=num_class, d_model=d_model, num_layers=num_layers).to(device)
+        return DecoderTransformerModel(feature_dim=8, seq_len=previous, num_class=num_class, d_model=d_model, num_layers=num_layers).to(device)
     elif model_type == "moe":
         from models.sequence_models import DecoderTransformerModelMoE
-        return DecoderTransformerModelMoE(feature_dim=4, seq_len=previous, num_class=num_class, d_model=d_model, num_layers=num_layers).to(device)
+        return DecoderTransformerModelMoE(feature_dim=8, seq_len=previous, num_class=num_class, d_model=d_model, num_layers=num_layers).to(device)
     else:
         from models.FCmodel import FCmodel
-        return FCmodel(feature_dim=4, seq_len=previous, num_class=num_class, hidden_size=hidden, num_layers=num_layers).to(device)
+        return FCmodel(feature_dim=8, seq_len=previous, num_class=num_class, hidden_size=hidden, num_layers=num_layers).to(device)
 
 
 def evaluate(model, test_loader, model_type, device):

@@ -52,11 +52,16 @@ class DS(Dataset):
     def __getitem__(self, idx):
         raw = self.data[idx]
         pp = self.previous + self.predict
-        mean = raw[:pp]; change = raw[pp:2*pp]; hl = raw[2*pp:3*pp]; cd_ = raw[3*pp:4*pp]
-        price_pct = _cal_pct(mean[:self.previous])
-        pct_chg = (mean[-1] - mean[self.previous - 1]) / mean[self.previous - 1]
+        pct     = raw[0*pp:1*pp]; ampl   = raw[1*pp:2*pp]
+        daychg  = raw[2*pp:3*pp]
+        chg     = raw[3*pp:4*pp]; cd_    = raw[4*pp:5*pp]
+        bb_pos  = raw[5*pp:6*pp]; bb_w   = raw[6*pp:7*pp]
+        rsi     = raw[7*pp:8*pp]
+        pct_chg = (1+pct[self.previous])*(1+pct[self.previous+1])*(1+pct[self.previous+2]) - 1
         label = _get_label(pct_chg)
-        features = np.stack([price_pct, change[:self.previous], hl[:self.previous], cd_[:self.previous]], axis=-1)
+        features = np.stack([pct[:self.previous], ampl[:self.previous], daychg[:self.previous],
+                             chg[:self.previous], cd_[:self.previous],
+                             bb_pos[:self.previous], bb_w[:self.previous]], axis=-1)
         return features.astype(np.float32), label
 
 class DSShared(Dataset):
@@ -68,11 +73,16 @@ class DSShared(Dataset):
     def __getitem__(self, idx):
         raw = _global_data[idx + self.start].numpy()
         pp = self.previous + self.predict
-        mean = raw[:pp]; change = raw[pp:2*pp]; hl = raw[2*pp:3*pp]; cd_ = raw[3*pp:4*pp]
-        price_pct = _cal_pct(mean[:self.previous])
-        pct_chg = (mean[-1] - mean[self.previous - 1]) / mean[self.previous - 1]
+        pct     = raw[0*pp:1*pp]; ampl   = raw[1*pp:2*pp]
+        daychg  = raw[2*pp:3*pp]
+        chg     = raw[3*pp:4*pp]; cd_    = raw[4*pp:5*pp]
+        bb_pos  = raw[5*pp:6*pp]; bb_w   = raw[6*pp:7*pp]
+        rsi     = raw[7*pp:8*pp]
+        pct_chg = (1+pct[self.previous])*(1+pct[self.previous+1])*(1+pct[self.previous+2]) - 1
         label = _get_label(pct_chg)
-        features = np.stack([price_pct, change[:self.previous], hl[:self.previous], cd_[:self.previous]], axis=-1)
+        features = np.stack([pct[:self.previous], ampl[:self.previous], daychg[:self.previous],
+                             chg[:self.previous], cd_[:self.previous],
+                             bb_pos[:self.previous], bb_w[:self.previous]], axis=-1)
         return features.astype(np.float32), label
 
 
@@ -152,7 +162,7 @@ def main():
 
     # ── 构建模型 ──
     from models.FCmodel import FCmodel
-    model = FCmodel(feature_dim=4, num_class=num_class, hidden_size=HIDDEN_SIZE,
+    model = FCmodel(feature_dim=8, num_class=num_class, hidden_size=HIDDEN_SIZE,
                     num_layers=NUM_LAYERS, seq_len=PREVIOUS_NUM).to(device)
     # 加载 backbone
     backbone_state = FCmodel.extract_backbone_from_pt(args.backbone, map_location=device)
