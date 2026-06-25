@@ -35,15 +35,19 @@ def _cal_pct(d):
 
 def compute_label(close_p_slice):
     pct = (close_p_slice[-1] - close_p_slice[PREVIOUS_NUM - 1]) / close_p_slice[PREVIOUS_NUM - 1]
-    if pct < -0.1:
+    if pct < -0.15:
         return 0, pct
-    elif pct > 0.1:
+    elif pct < -0.05:
+        return 1, pct
+    elif pct < 0.05:
         return 2, pct
-    return 1, pct
+    elif pct <= 0.15:
+        return 3, pct
+    return 4, pct
 
 
-LABEL_NAMES = {0: "L0 (跌 >10%)", 1: "L1 (震荡)", 2: "L2 (涨 >10%)"}
-LABEL_COLORS = {0: "#e74c3c", 1: "#95a5a6", 2: "#2ecc71"}
+LABEL_NAMES = {0: "L0 (<-15%)", 1: "L1 (-15%~-5%)", 2: "L2 (-5%~5%)", 3: "L3 (5%~15%)", 4: "L4 (>15%)"}
+LABEL_COLORS = {0: "#c0392b", 1: "#e74c3c", 2: "#95a5a6", 3: "#f39c12", 4: "#27ae60"}
 
 
 class DatasetViewer:

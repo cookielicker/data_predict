@@ -24,7 +24,7 @@ DEFAULTS = {
         "type": "fc",
         "feature_dim": 8,
         "seq_len": 30,
-        "num_class": 4,
+        "num_class": 5,
         "hidden_size": 256,
         "num_layers": 4,
         "d_model": 128,
@@ -94,13 +94,14 @@ def _cal_pct(d):
         r = np.where(np.isfinite(r), r, 0)
     return r
 
-_THRESHOLD = 0.10
+_THRESHOLDS = [-0.15, -0.05, 0.05, 0.15]
 
 def _get_label(pct_chg):
-    if pct_chg < -_THRESHOLD: return 0
-    elif pct_chg < 0: return 1
-    elif pct_chg <= _THRESHOLD: return 2
-    else: return 3
+    if pct_chg < _THRESHOLDS[0]: return 0
+    elif pct_chg < _THRESHOLDS[1]: return 1
+    elif pct_chg < _THRESHOLDS[2]: return 2
+    elif pct_chg <= _THRESHOLDS[3]: return 3
+    else: return 4
 
 class DS(Dataset):
     def __init__(self, data, start, end, previous, predict):
@@ -253,24 +254,20 @@ def train_epochs(model, train_loader, test_loader, criterion, optimizer, cfg, de
             f1[c] = 2*precision[c]*recall[c]/(precision[c]+recall[c]) if (precision[c]+recall[c])>0 else 0
 
         acc = 100.0 * sum(cm[i][i] for i in range(n_classes)) / sum(sum(r) for r in cm)
-        # 距离加权得分矩阵: 正确=1, 差1档=0.7, 差2档=0.3, 全反=0
-        score_mat = [[1.0 - 0.3 * abs(p - t) if abs(p - t) <= 2 else 0.0 for t in range(n_classes)] for p in range(n_classes)]
-        # 对3档及以上用 0, 其余线性衰减
-        for p in range(n_classes):
-            for t in range(n_classes):
-                d = abs(p - t)
-                if d == 0: score_mat[p][t] = 1.0
-                elif d == 1: score_mat[p][t] = 0.7
-                elif d == 2: score_mat[p][t] = 0.3
-                else: score_mat[p][t] = 0.0
-        total_weighted = 0
-        total_samples = 0
+        # 非对称得分矩阵 (方向反了更重罚, L2列只有L2猜对才给分)
+        score_mat = [[0.0]*n_classes for _ in range(n_classes)]
+        score_mat[0] = [1.0, 0.5, 0.0, 0.0, 0.0]
+        score_mat[1] = [0.7, 1.0, 0.0, 0.1, 0.0]
+        score_mat[2] = [0.2, 0.3, 1.0, 0.3, 0.2]
+        score_mat[3] = [0.0, 0.1, 0.0, 1.0, 0.7]
+        score_mat[4] = [0.0, 0.0, 0.0, 0.5, 1.0]
+        # 五类等权平均: L2(79%)不再主导Score
+        per_class_score = []
         for t in range(n_classes):
-            for p in range(n_classes):
-                count = cm[p][t]
-                total_weighted += score_mat[p][t] * count
-                total_samples += count
-        score = total_weighted / total_samples * 100 if total_samples > 0 else 0
+            class_weighted = sum(score_mat[p][t] * cm[p][t] for p in range(n_classes))
+            class_total = sum(cm[p][t] for p in range(n_classes))
+            per_class_score.append(class_weighted / class_total if class_total > 0 else 0)
+        score = sum(per_class_score) / n_classes * 100 if n_classes > 0 else 0
 
         is_best = score > best_score
         if is_best:
@@ -304,13 +301,14 @@ def main():
 
     cfg = load_config(args.config, args.override)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    global _THRESHOLD
-    _THRESHOLD = cfg['training'].get('threshold', 0.10)
+    global _THRESHOLDS
+    t = cfg['training'].get('threshold', 0.10)
+    _THRESHOLDS = [-t, -t/2, t/2, t]  # e.g. 0.10→[-0.10,-0.05,0.05,0.10]; 0.15→[-0.15,-0.075,0.075,0.15]
 
     print(f"\n{'='*60}")
     print(f"配置: {args.config}")
     print(f"{'='*60}")
-    print(f"模型: {cfg['model']['type']}, 阈值: ±{_THRESHOLD*100:.0f}%, 类别数: {len(cfg['training']['weights'])}")
+    print(f"模型: {cfg['model']['type']}, 阈值: ±{t*100:.0f}%, 类别数: {len(cfg['training']['weights'])}")
     print(f"超参: {json.dumps(cfg['model'], indent=None)}")
     print(f"训练: {json.dumps(cfg['training'], indent=None)}")
     if args.two_stage:

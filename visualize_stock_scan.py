@@ -30,9 +30,9 @@ PP = PREVIOUS_NUM + PREDICT_NUM  # 33
 FEATURE_DIM = 8
 INPUT_DIM = PREVIOUS_NUM * FEATURE_DIM  # 240
 
-LABEL_NAMES = {0: "L0 (跌>10%)", 1: "L1 (-10%~0)", 2: "L2 (0~10%)", 3: "L3 (涨>10%)"}
-LABEL_COLORS = {0: "#e74c3c", 1: "#e67e22", 2: "#3498db", 3: "#2ecc71"}
-NUM_CLASSES = 4
+LABEL_NAMES = {0: "L0 (<-15%)", 1: "L1 (-15%~-5%)", 2: "L2 (-5%~5%)", 3: "L3 (5%~15%)", 4: "L4 (>15%)"}
+LABEL_COLORS = {0: "#c0392b", 1: "#e74c3c", 2: "#95a5a6", 3: "#f39c12", 4: "#27ae60"}
+NUM_CLASSES = 5
 
 DEFAULT_MODEL = "best_fc_twostage_30d_h256_l4_20260601_222325.pt"
 STOCK_DATA_DIR = "stock_data"
@@ -107,10 +107,11 @@ def compute_features_and_label(df, end_idx):
         if len(fut_close) > 0 and hist['close'].iloc[-1] != 0:
             ret_pct = fut_close[-1] / float(hist['close'].iloc[-1]) - 1
             if np.isfinite(ret_pct):
-                if ret_pct < -0.1: true_label = 0
-                elif ret_pct < 0: true_label = 1
-                elif ret_pct <= 0.1: true_label = 2
-                else: true_label = 3
+                if ret_pct < -0.15: true_label = 0
+                elif ret_pct < -0.05: true_label = 1
+                elif ret_pct < 0.05: true_label = 2
+                elif ret_pct <= 0.15: true_label = 3
+                else: true_label = 4
                 if future_days < PREDICT_NUM:
                     true_days_info = f" (仅{future_days}天)"
             else:
@@ -217,6 +218,7 @@ class StockScanViewer:
         _add_btn("Pred L1", "pred_l1", "#4a2000", "#e67e22")
         _add_btn("Pred L2", "pred_l2", "#002040", "#3498db")
         _add_btn("Pred L3", "pred_l3", "#204020", "#2ecc71")
+        _add_btn("Pred L4", "pred_l4", "#002020", "#27ae60")
 
         self._filter_breakdown = tk.Label(filt, text="", bg="#2b2b2b", fg="#7f8c8d",
                                            font=("Consolas", 10))
@@ -249,7 +251,7 @@ class StockScanViewer:
         prob_frame = tk.Frame(nav, bg="#2b2b2b")
         prob_frame.pack(side=tk.LEFT, padx=16)
         self._prob_labels = {}
-        for i, (name, color) in enumerate([("L0", "#e74c3c"), ("L1", "#e67e22"), ("L2", "#3498db"), ("L3", "#2ecc71")]):
+        for i, (name, color) in enumerate([("L0", "#c0392b"), ("L1", "#e74c3c"), ("L2", "#95a5a6"), ("L3", "#f39c12"), ("L4", "#27ae60")]):
             lbl = tk.Label(prob_frame, text=f"{name}: --%", font=("Consolas", 12, "bold"),
                           bg="#2b2b2b", fg=color)
             lbl.pack(side=tk.LEFT, padx=6)
@@ -421,7 +423,8 @@ class StockScanViewer:
         n_l1 = sum(1 for r in valid_results if r['pred'] == 1)
         n_l2 = sum(1 for r in valid_results if r['pred'] == 2)
         n_l3 = sum(1 for r in valid_results if r['pred'] == 3)
-        summary = f"完成! {len(valid_results)}/{total} 有效 | L0={n_l0} L1={n_l1} L2={n_l2} L3={n_l3}"
+        n_l4 = sum(1 for r in valid_results if r['pred'] == 4)
+        summary = f"完成! {len(valid_results)}/{total} 有效 | L0={n_l0} L1={n_l1} L2={n_l2} L3={n_l3} L4={n_l4}"
         print(f"\n[visual_scan] {summary}")
         self._set_progress(total, total, summary)
 
@@ -463,16 +466,17 @@ class StockScanViewer:
                (mode == "pred_l0" and p == 0) or \
                (mode == "pred_l1" and p == 1) or \
                (mode == "pred_l2" and p == 2) or \
-               (mode == "pred_l3" and p == 3):
+               (mode == "pred_l3" and p == 3) or \
+               (mode == "pred_l4" and p == 4):
                 self._filtered.append(i)
 
         self._filter_pos = 0
         total = len(self._filtered)
         if total > 0:
             fps = [self._latest_results[i]['pred'] for i in self._filtered]
-            n_l0, n_l1, n_l2, n_l3 = fps.count(0), fps.count(1), fps.count(2), fps.count(3)
+            n_l0, n_l1, n_l2, n_l3, n_l4 = fps.count(0), fps.count(1), fps.count(2), fps.count(3), fps.count(4)
             self._filter_breakdown.config(
-                text=f"{mode}: {total} stocks | L0={n_l0} L1={n_l1} L2={n_l2} L3={n_l3}")
+                text=f"{mode}: {total} stocks | L0={n_l0} L1={n_l1} L2={n_l2} L3={n_l3} L4={n_l4}")
             self._load_stock_at_pos()
         else:
             self._filter_breakdown.config(text=f"{mode}: 0 stocks")

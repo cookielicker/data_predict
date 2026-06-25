@@ -26,9 +26,9 @@ PP = PREVIOUS_NUM + PREDICT_NUM  # 33
 FEATURE_DIM = 8
 INPUT_DIM = PREVIOUS_NUM * FEATURE_DIM  # 240
 
-LABEL_NAMES = {0: "L0 (跌>10%)", 1: "L1 (-10%~0)", 2: "L2 (0~10%)", 3: "L3 (涨>10%)"}
-LABEL_COLORS = {0: "#e74c3c", 1: "#e67e22", 2: "#3498db", 3: "#2ecc71"}
-NUM_CLASSES = 4
+LABEL_NAMES = {0: "L0 (<-15%)", 1: "L1 (-15%~-5%)", 2: "L2 (-5%~5%)", 3: "L3 (5%~15%)", 4: "L4 (>15%)"}
+LABEL_COLORS = {0: "#c0392b", 1: "#e74c3c", 2: "#95a5a6", 3: "#f39c12", 4: "#27ae60"}
+NUM_CLASSES = 5
 
 
 def _cal_pct(d):
@@ -41,11 +41,15 @@ def _cal_pct(d):
 
 def compute_label(mean_slice):
     pct = (mean_slice[-1] - mean_slice[PREVIOUS_NUM - 1]) / mean_slice[PREVIOUS_NUM - 1]
-    if pct < -0.1:
+    if pct < -0.15:
         return 0, pct
-    elif pct > 0.1:
+    elif pct < -0.05:
+        return 1, pct
+    elif pct < 0.05:
         return 2, pct
-    return 1, pct
+    elif pct <= 0.15:
+        return 3, pct
+    return 4, pct
 
 
 class ModelPredictionViewer:
@@ -112,6 +116,7 @@ class ModelPredictionViewer:
         _add_filter_btn("Pred L1", "pred_l1", "#4a2000", "#e67e22")
         _add_filter_btn("Pred L2", "pred_l2", "#002040", "#3498db")
         _add_filter_btn("Pred L3", "pred_l3", "#204020", "#2ecc71")
+        _add_filter_btn("Pred L4", "pred_l4", "#002020", "#27ae60")
 
         tk.Label(filt, text="  |  ", bg="#2b2b2b", fg="#555555").pack(side=tk.LEFT, padx=4)
 
@@ -338,9 +343,10 @@ class ModelPredictionViewer:
 
             pct_chg = (1+pct[:, PREVIOUS_NUM])*(1+pct[:, PREVIOUS_NUM+1])*(1+pct[:, PREVIOUS_NUM+2]) - 1
             labels = np.zeros(batch_n, dtype=np.int64)
-            labels = np.where(pct_chg < -0.1, 0,
-                     np.where(pct_chg < 0, 1,
-                     np.where(pct_chg <= 0.1, 2, 3)))
+            labels = np.where(pct_chg < -0.15, 0,
+                     np.where(pct_chg < -0.05, 1,
+                     np.where(pct_chg < 0.05, 2,
+                     np.where(pct_chg <= 0.15, 3, 4))))
 
             features = np.concatenate([
                 pct[:, :PREVIOUS_NUM], ampl[:, :PREVIOUS_NUM], daychg[:, :PREVIOUS_NUM],
@@ -370,7 +376,7 @@ class ModelPredictionViewer:
             cm[p][t] += 1
 
         summary = (f"推理完成! Acc={100*cm.trace()/cm.sum():.1f}% | "
-                   f"Pred_L0={cm[0].sum():,} Pred_L1={cm[1].sum():,} Pred_L2={cm[2].sum():,}")
+                   f"Pred_L0={cm[0].sum():,} Pred_L1={cm[1].sum():,} Pred_L2={cm[2].sum():,} Pred_L3={cm[3].sum():,} Pred_L4={cm[4].sum():,}")
         self._status_label.config(text=summary)
         self._set_progress(0, 0, summary)
 
@@ -413,6 +419,8 @@ class ModelPredictionViewer:
             mask = p == 2
         elif mode == "pred_l3":
             mask = p == 3
+        elif mode == "pred_l4":
+            mask = p == 4
         else:
             mask = np.ones(len(p), dtype=bool)
 
@@ -432,13 +440,17 @@ class ModelPredictionViewer:
             n_l0 = int((filt_t == 0).sum())
             n_l1 = int((filt_t == 1).sum())
             n_l2 = int((filt_t == 2).sum())
+            n_l3 = int((filt_t == 3).sum())
+            n_l4 = int((filt_t == 4).sum())
             n_correct = int((filt_p == filt_t).sum())
             total = len(self._filtered_indices)
             self._filter_breakdown.config(
                 text=f"Filter={mode} | {cm}: {total} samples | "
                      f"True L0={n_l0} ({100*n_l0/total:.0f}%), "
                      f"True L1={n_l1} ({100*n_l1/total:.0f}%), "
-                     f"True L2={n_l2} ({100*n_l2/total:.0f}%) | "
+                     f"True L2={n_l2} ({100*n_l2/total:.0f}%), "
+                     f"True L3={n_l3} ({100*n_l3/total:.0f}%), "
+                     f"True L4={n_l4} ({100*n_l4/total:.0f}%) | "
                      f"Correct={n_correct}/{total} ({100*n_correct/total:.0f}%)"
             )
         else:
@@ -495,10 +507,11 @@ class ModelPredictionViewer:
         chg     = raw[3*PP:4*PP]; cd_    = raw[4*PP:5*PP]
 
         pct_chg = (1+pct[PREVIOUS_NUM])*(1+pct[PREVIOUS_NUM+1])*(1+pct[PREVIOUS_NUM+2]) - 1
-        if pct_chg < -0.1: true_label = 0
-        elif pct_chg < 0: true_label = 1
-        elif pct_chg <= 0.1: true_label = 2
-        else: true_label = 3
+        if pct_chg < -0.15: true_label = 0
+        elif pct_chg < -0.05: true_label = 1
+        elif pct_chg < 0.05: true_label = 2
+        elif pct_chg <= 0.15: true_label = 3
+        else: true_label = 4
         ret_pct = pct_chg
         pred_label = int(self._predictions[test_idx]) if self._predictions is not None else -1
 

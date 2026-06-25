@@ -1,6 +1,6 @@
 # Stock Prediction — A股三天涨跌预测
 
-4分类：L0(跌>10%) / L1(-10%~0%) / L2(0%~10%) / L3(涨>10%)
+5分类：L0(<-15%) / L1(-15%~-5%) / L2(-5%~5%) / L3(5%~15%) / L4(>15%)
 
 ## 数据管线
 
@@ -51,7 +51,7 @@ python visualize_stock_scan.py
 # 测试集回测浏览 (加载模型, 按预测类别查看样本)
 python visualize_model_predictions.py
 
-# 原始数据集浏览 (查看4特征走势)
+# 原始数据集浏览 (查看8特征走势)
 python visualize_dataset.py
 ```
 
@@ -71,7 +71,7 @@ python visualize_dataset.py
 ```
 baostock_dataset_30/    ← 最终数据集 (879个.npy, 每文件10000行)
 stock_data/             ← baostock原始CSV (每只股票一个文件)
-middle_data_baostock/   ← 中间矩阵 (4个特征×(天×股票))
+middle_data_baostock/   ← 中间矩阵 (8个特征×(天×股票))
 configs/                ← JSON训练配置
 models/                 ← 模型定义 (FCmodel, sequence_models)
 train/                  ← 训练脚本 (train_config, train_classifier, train, train_two_stage)
@@ -82,20 +82,21 @@ EXPERIMENT_LOG.md       ← 实验记录
 
 ## 评估
 
-Score = 全量样本距离加权得分，按样本数加权 ×100:
+Score = 五类等权非对称距离加权得分 ×100 (L2列对角锁定, 方向反重罚):
 
-| Pred \ True | L0 | L1 | L2 | L3 |
-|---|---|---|---|---|
-| L0 | 1.0 | 0.7 | 0.3 | 0.0 |
-| L1 | 0.7 | 1.0 | 0.7 | 0.3 |
-| L2 | 0.3 | 0.7 | 1.0 | 0.7 |
-| L3 | 0.0 | 0.3 | 0.7 | 1.0 |
+| Pred \ True | L0 | L1 | L2 | L3 | L4 |
+|---|---|---|---|---|---|
+| L0 | 1.0 | 0.5 | 0.0 | 0.0 | 0.0 |
+| L1 | 0.7 | 1.0 | 0.0 | 0.1 | 0.0 |
+| L2 | 0.2 | 0.3 | 1.0 | 0.3 | 0.2 |
+| L3 | 0.0 | 0.1 | 0.0 | 1.0 | 0.7 |
+| L4 | 0.0 | 0.0 | 0.0 | 0.5 | 1.0 |
 
 当前最佳: **FC 1M** — 详见 `EXPERIMENT_LOG.md`
 
 ## 模型架构
 
-所有模型统一输入 `[bs, 30, 4]` (30天×4特征)，Backbone + Classifier 分离，支持冻结Backbone只训分类头。
+所有模型统一输入 `[bs, 30, 8]` (30天×8特征)，Backbone + Classifier 分离，支持冻结Backbone只训分类头。
 
 | 模型 | 结构 | Backbone | Classifier |
 |------|------|----------|------------|
