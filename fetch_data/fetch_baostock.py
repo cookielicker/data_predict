@@ -53,53 +53,28 @@ def logout():
 
 
 def _fetch_one_query(code, start_date, end_date):
-    """执行一次查询 (非sz股票: 单次; sz股票: 分段)"""
+    """执行一次查询 (全市场单次全量, 不分段)
+
+    修复说明: 原 sz 股票走分段查询, 但 chunk_start=chunk_end 导致边界日被
+    前后两段重复查询(重复行), 进而污染特征(shift错位→涨跌幅清零)。
+    实测 baostock 单次可查全量(2523行)无行数限制, 故统一为单次查询。
+    """
     fields = "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST"
 
-    if not code.startswith('sz.'):
-        rs = bs.query_history_k_data_plus(
-            code, fields=fields,
-            start_date=start_date, end_date=end_date,
-            frequency="d", adjustflag="2"
-        )
-        if rs.error_code != '0':
-            raise ConnectionError(f"query failed: {rs.error_msg}")
+    rs = bs.query_history_k_data_plus(
+        code, fields=fields,
+        start_date=start_date, end_date=end_date,
+        frequency="d", adjustflag="2"
+    )
+    if rs.error_code != '0':
+        raise ConnectionError(f"query failed: {rs.error_msg}")
 
-        rows = []
-        while rs.next():
-            rows.append(rs.get_row_data())
-        if not rows:
-            return None
-        return pd.DataFrame(rows, columns=rs.fields)
-
-    # sz 股票分段查询
-    chunk_days = 365
-    start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-    end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-
-    all_rows = []
-    chunk_start = start_dt
-    while chunk_start < end_dt:
-        chunk_end = min(chunk_start + timedelta(days=chunk_days), end_dt)
-
-        rs = bs.query_history_k_data_plus(
-            code, fields=fields,
-            start_date=chunk_start.strftime('%Y-%m-%d'),
-            end_date=chunk_end.strftime('%Y-%m-%d'),
-            frequency="d", adjustflag="2"
-        )
-        if rs.error_code != '0':
-            raise ConnectionError(f"sz chunk query failed: {rs.error_msg}")
-
-        while rs.next():
-            all_rows.append(rs.get_row_data())
-
-        chunk_start = chunk_end
-        time.sleep(0.3)
-
-    if not all_rows:
+    rows = []
+    while rs.next():
+        rows.append(rs.get_row_data())
+    if not rows:
         return None
-    return pd.DataFrame(all_rows, columns=rs.fields)
+    return pd.DataFrame(rows, columns=rs.fields)
 
 
 def fetch_kline_data(code, start_date, end_date):
@@ -174,6 +149,37 @@ def _merge_and_save(stock_file, df, is_refresh):
         return (True, False)
 
 
+def _fix_ipo_adjustflag(df):
+    """修复上市首日 adjustflag=3(不复权) 导致的假跳变.
+
+    前复权下恒有 close[t] == preclose[t+1]。数据范围内上市的新股, 其上市首日
+    baostock 返回 adjustflag=3(不复权原始价), 次日才转 adjustflag=2(前复权),
+    两套口径在首日→次日间产生假跳变(如 799→594, 真实涨幅+10%)。
+    修复: 用 preclose[次日] 做锚, 等比缩放首日 open/high/low/close 到前复权口径。
+    只改价格字段, volume/amount/turn/preclose 均不动(复权不影响成交数据)。
+    """
+    if 'adjustflag' not in df.columns or 'preclose' not in df.columns:
+        return df
+    import math
+    df = df.reset_index(drop=True)
+    af = df['adjustflag'].astype(str).str.strip()
+    for i in df.index[af == '3'].tolist():
+        if i + 1 >= len(df):
+            continue  # 无次日, 无法锚定
+        close_i = pd.to_numeric(df.loc[i, 'close'], errors='coerce')
+        preclose_next = pd.to_numeric(df.loc[i + 1, 'preclose'], errors='coerce')
+        if pd.isna(close_i) or pd.isna(preclose_next) or close_i == 0:
+            continue
+        scale = preclose_next / close_i
+        if not math.isfinite(scale) or scale <= 0 or abs(scale - 1.0) < 1e-6:
+            continue
+        for col in ['open', 'high', 'low', 'close']:
+            v = pd.to_numeric(df.loc[i, col], errors='coerce')
+            if not pd.isna(v):
+                df.loc[i, col] = v * scale
+    return df
+
+
 def _validate_and_clean(df):
     """过滤 baostock 返回中的无效行 (列数不对/日期格式错/缺失关键字段)"""
     if df is None or len(df) == 0:
@@ -201,6 +207,8 @@ def _validate_and_clean(df):
     df = df[~((df['open'] == 0) & (df['high'] == 0) & (df['low'] == 0) & (df['close'] == 0))]
     if len(df) == 0:
         return None
+    # 4. 修复上市首日 adjustflag=3 假跳变
+    df = _fix_ipo_adjustflag(df)
     return df.reset_index(drop=True)
 
 def main():
